@@ -8,7 +8,7 @@ final class GestureDetector {
     static let mouseFingerCount = 3
     static let trackpadFingerCount = 4
     static let maxTapDuration: TimeInterval = 0.5
-    static let interTapGap: TimeInterval = 0.35
+    static let interTapGap: TimeInterval = 0.22
     static let driftThreshold: CGFloat = 0.15  // normalized 0..1 space
 
     private let actionHandler: ActionHandler
