@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         os_log("MiddleShot launching", log: log, type: .info)
         PermissionHelper.ensureAccessibility()
+        PermissionHelper.ensureInputMonitoring()
+        PermissionHelper.ensureScreenRecording()
 
         let actionHandler = ActionHandler()
         let detector = GestureDetector(actionHandler: actionHandler)
@@ -23,8 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         listener.start()
 
         let mouseTap = MouseClickTap()
-        mouseTap.shouldIntercept = {
-            detector.mouseFingerCount >= GestureDetector.mouseFingerCount
+        mouseTap.shouldIntercept = { [weak listener] in
+            (listener?.currentMouseFingerCount ?? 0) >= GestureDetector.mouseFingerCount
         }
         mouseTap.onIntercept = {
             actionHandler.postMiddleClickAtCursor()

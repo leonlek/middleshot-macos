@@ -1,4 +1,5 @@
 import Cocoa
+import os
 import os.log
 
 // MultitouchSupport.framework is private. The MTTouch layout in the bridging
@@ -19,6 +20,15 @@ final class MagicMouseListener {
 
     /// Invoked on the main queue.
     var onFrame: ((Frame) -> Void)?
+
+    /// Magic Mouse finger count, updated synchronously from the MT callback
+    /// thread before the frame is dispatched to main. Read by `MouseClickTap`
+    /// when a `leftMouseDown` arrives — going through `onFrame` on main would
+    /// race the click event if the main runloop hadn't drained the frame yet.
+    private let mouseFingerCountLock = OSAllocatedUnfairLock<Int>(initialState: 0)
+    var currentMouseFingerCount: Int {
+        mouseFingerCountLock.withLock { $0 }
+    }
 
     private var devices: [MTDeviceRef] = []
 
@@ -84,6 +94,10 @@ final class MagicMouseListener {
                 cx /= Double(contacts)
                 cy /= Double(contacts)
             }
+        }
+        if kind == .magicMouse {
+            let snapshot = contacts
+            mouseFingerCountLock.withLock { $0 = snapshot }
         }
         let frame = Frame(
             device: kind,

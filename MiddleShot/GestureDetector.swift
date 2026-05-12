@@ -20,10 +20,6 @@ final class GestureDetector {
     // Trackpad: single tap → middle click, double tap → screenshot.
     private let trackpadTap: StaticTapRecognizer
 
-    /// Latest finger count seen on the Magic Mouse — read by the CGEventTap when a
-    /// left mouse-down arrives to decide whether to translate it into a middle click.
-    private(set) var mouseFingerCount: Int = 0
-
     init(actionHandler: ActionHandler) {
         self.actionHandler = actionHandler
         self.mouseDoubleTap = StaticTapRecognizer(
@@ -51,7 +47,6 @@ final class GestureDetector {
     func ingest(frame: MagicMouseListener.Frame) {
         switch frame.device {
         case .magicMouse:
-            mouseFingerCount = frame.fingerCount
             mouseDoubleTap.ingest(frame: frame)
         case .trackpad:
             trackpadTap.ingest(frame: frame)
