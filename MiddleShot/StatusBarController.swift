@@ -24,13 +24,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                                 accessibilityDescription: "MiddleShot")
             image?.isTemplate = true
             button.image = image
-            // Text label makes it findable when the menu bar is full and
-            // items get clipped behind the notch on MacBook Pro / Air.
-            button.title = "MS"
-            button.imagePosition = .imageLeading
-            os_log("Status item created (image=%{public}@, title=%{public}@)",
+            os_log("Status item created (image=%{public}@)",
                    log: log, type: .info,
-                   image == nil ? "nil" : "ok", button.title)
+                   image == nil ? "nil" : "ok")
         } else {
             os_log("Status item has no button — menu bar may be unavailable",
                    log: log, type: .error)
