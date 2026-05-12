@@ -23,17 +23,26 @@ final class ActionHandler {
     }
 
     func triggerAreaScreenshot() {
-        let task = Process()
-        task.launchPath = "/usr/sbin/screencapture"
-        // -i interactive, -c clipboard, -u shows the floating thumbnail in
-        // the bottom-right corner just like Cmd+Shift+Ctrl+4.
-        task.arguments = ["-i", "-c", "-u"]
-        do {
-            try task.run()
-        } catch {
-            os_log("Failed to launch screencapture: %{public}@",
-                   log: log, type: .error, "\(error)")
+        // Post Cmd+Shift+Ctrl+4 — the system area-screenshot-to-clipboard
+        // shortcut. Going through the system code path (not `screencapture -c`)
+        // is the only reliable way to get the floating thumbnail UI; the CLI
+        // tool's `-u` flag is a no-op when the capture target is the clipboard.
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            os_log("Failed to create CGEventSource", log: log, type: .error)
+            return
         }
+        let keyCode: CGKeyCode = 0x15  // kVK_ANSI_4
+        let flags: CGEventFlags = [.maskCommand, .maskShift, .maskControl]
+
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
+            os_log("Failed to create keyboard CGEvent", log: log, type: .error)
+            return
+        }
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
     }
 
     // NSEvent.mouseLocation is in screen coords with origin bottom-left, while
