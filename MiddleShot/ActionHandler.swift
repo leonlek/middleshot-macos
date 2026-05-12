@@ -25,7 +25,9 @@ final class ActionHandler {
     func triggerAreaScreenshot() {
         let task = Process()
         task.launchPath = "/usr/sbin/screencapture"
-        task.arguments = ["-i", "-c"]
+        // -i interactive, -c clipboard, -u shows the floating thumbnail in
+        // the bottom-right corner just like Cmd+Shift+Ctrl+4.
+        task.arguments = ["-i", "-c", "-u"]
         do {
             try task.run()
         } catch {
