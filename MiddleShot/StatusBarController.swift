@@ -7,8 +7,10 @@ private let log = OSLog(subsystem: "app.middleshot", category: "app")
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let launchAtLoginItem: NSMenuItem
+    private let onReloadDevices: () -> Void
 
-    override init() {
+    init(onReloadDevices: @escaping () -> Void) {
+        self.onReloadDevices = onReloadDevices
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         launchAtLoginItem = NSMenuItem(
             title: "Launch at Login",
@@ -44,6 +46,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         launchAtLoginItem.target = self
         menu.addItem(launchAtLoginItem)
+        addItem(to: menu, title: "Reload Devices",
+                action: #selector(reloadDevices))
         menu.addItem(.separator())
 
         addItem(to: menu, title: "Open Accessibility…",
@@ -74,6 +78,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func openAccessibility()    { PermissionHelper.openAccessibilitySettings() }
     @objc private func openInputMonitoring()  { PermissionHelper.openInputMonitoringSettings() }
     @objc private func openScreenRecording()  { PermissionHelper.openScreenRecordingSettings() }
+
+    @objc private func reloadDevices() {
+        os_log("Reload Devices requested", log: log, type: .info)
+        onReloadDevices()
+    }
 
     @objc private func toggleLaunchAtLogin() {
         let service = SMAppService.mainApp

@@ -37,7 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.detector = detector
         self.listener = listener
         self.mouseTap = mouseTap
-        self.statusBar = StatusBarController()
+        self.statusBar = StatusBarController(onReloadDevices: { [weak listener] in
+            listener?.stop()
+            listener?.start()
+        })
     }
 
     func applicationWillTerminate(_ notification: Notification) {
