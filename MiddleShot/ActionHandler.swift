@@ -26,17 +26,16 @@ final class ActionHandler {
         // Matches Cmd+Shift+4: save the capture to the system screenshot
         // location (Desktop by default) and present the floating-thumbnail UI.
         //
-        // We tried `-c` (clipboard) and synthesized Cmd+Shift+Ctrl+4 via
-        // CGEvent; neither reliably produces the thumbnail. `-c` and `-u` are
-        // mutually exclusive at the screencapture layer (thumbnail needs a
-        // saved file to drag/preview), and WindowServer's symbolic-hotkey
-        // path silently drops synthesized modifier+key events.
-        //
-        // The thumbnail itself can be dragged into any text field (Slack,
-        // browser, etc.) so the loss of direct clipboard is mostly cosmetic.
+        // The man page claims "-u: files passed to command line will be
+        // ignored", but `screencapture -i -u` without a path actually exits
+        // with `no file specified`. We pass a tmp path purely to satisfy the
+        // argument parser; the actual save destination is whatever the user
+        // has configured in com.apple.screencapture (Desktop by default).
+        let dummyPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("middleshot-screencapture-dummy.png")
         let task = Process()
         task.launchPath = "/usr/sbin/screencapture"
-        task.arguments = ["-i", "-u"]
+        task.arguments = ["-i", "-u", dummyPath]
         do {
             try task.run()
         } catch {
