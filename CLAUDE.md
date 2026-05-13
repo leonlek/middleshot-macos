@@ -33,7 +33,14 @@ Personal-use project. **Not destined for the Mac App Store** — depends on the 
 
 ### Screenshot Mode
 
-Area selection, copied to clipboard: shells out to `/usr/sbin/screencapture -i -c`. Configurable later via a Settings panel.
+Area selection saved to the system screenshot location (Desktop by default) with the floating-thumbnail UI — matches Cmd+Shift+4. Shells out to `/usr/sbin/screencapture -i -u`. The thumbnail can be dragged directly into any text field (Slack, browser, etc.), so a separate clipboard copy is unnecessary.
+
+**Rejected alternatives (don't relitigate without strong reason):**
+
+- `-i -c` (clipboard-only): no thumbnail appears. `-u` is silently dropped when the capture target is the clipboard because the floating thumbnail needs a saved file to preview/drag.
+- Synthesizing Cmd+Shift+Ctrl+4 via `CGEvent` to get clipboard + thumbnail in one shot: WindowServer's symbolic-hotkey handler ignores synthesized modifier+key events on recent macOS. Tested, never fired.
+
+Configurable later via a Settings panel.
 
 ## Architecture
 

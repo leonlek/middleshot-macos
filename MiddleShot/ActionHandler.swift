@@ -23,26 +23,26 @@ final class ActionHandler {
     }
 
     func triggerAreaScreenshot() {
-        // Post Cmd+Shift+Ctrl+4 — the system area-screenshot-to-clipboard
-        // shortcut. Going through the system code path (not `screencapture -c`)
-        // is the only reliable way to get the floating thumbnail UI; the CLI
-        // tool's `-u` flag is a no-op when the capture target is the clipboard.
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            os_log("Failed to create CGEventSource", log: log, type: .error)
-            return
+        // Matches Cmd+Shift+4: save the capture to the system screenshot
+        // location (Desktop by default) and present the floating-thumbnail UI.
+        //
+        // We tried `-c` (clipboard) and synthesized Cmd+Shift+Ctrl+4 via
+        // CGEvent; neither reliably produces the thumbnail. `-c` and `-u` are
+        // mutually exclusive at the screencapture layer (thumbnail needs a
+        // saved file to drag/preview), and WindowServer's symbolic-hotkey
+        // path silently drops synthesized modifier+key events.
+        //
+        // The thumbnail itself can be dragged into any text field (Slack,
+        // browser, etc.) so the loss of direct clipboard is mostly cosmetic.
+        let task = Process()
+        task.launchPath = "/usr/sbin/screencapture"
+        task.arguments = ["-i", "-u"]
+        do {
+            try task.run()
+        } catch {
+            os_log("Failed to launch screencapture: %{public}@",
+                   log: log, type: .error, "\(error)")
         }
-        let keyCode: CGKeyCode = 0x15  // kVK_ANSI_4
-        let flags: CGEventFlags = [.maskCommand, .maskShift, .maskControl]
-
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
-            os_log("Failed to create keyboard CGEvent", log: log, type: .error)
-            return
-        }
-        down.flags = flags
-        up.flags = flags
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
     }
 
     // NSEvent.mouseLocation is in screen coords with origin bottom-left, while
