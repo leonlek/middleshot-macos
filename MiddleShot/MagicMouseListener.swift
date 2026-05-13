@@ -65,10 +65,18 @@ final class MagicMouseListener {
     }
 
     func stop() {
-        for device in devices {
-            MTUnregisterContactFrameCallback(device, mtContactCallback)
-            MTDeviceStop(device)
-        }
+        // We deliberately do NOT call MTDeviceStop or
+        // MTUnregisterContactFrameCallback here. After system sleep the
+        // device handles have stale internal state and either call crashes
+        // inside MultitouchSupport's cleanup path (EXC_BAD_ACCESS at 0x8
+        // in __CFCheckCFInfoPACSignature — MT tries to schedule cleanup on
+        // a runloop that sleep already tore down).
+        //
+        // The leak is bounded — a few internal bookkeeping records per
+        // reload — and process termination releases everything. Worst case
+        // for hot reloads is duplicate frame callbacks if MT registers a
+        // second callback for the same device on the next start(); the
+        // GestureDetector state machine is idempotent on identical frames.
         devices.removeAll()
     }
 
