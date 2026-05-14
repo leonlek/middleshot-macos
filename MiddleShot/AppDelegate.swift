@@ -39,17 +39,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             listener?.start()
         }
 
-        // After Mac wakes from sleep, Bluetooth needs ~1s to reconnect the
-        // Magic Mouse — re-enumerating before that just rediscovers the
-        // trackpad and leaves the mouse broken until next manual reload.
+        // After wake, devices come back at unpredictable times: built-in
+        // trackpad usually within ~1s, Magic Mouse waits on Bluetooth
+        // reconnect (1–6s observed), and MT framework itself sometimes
+        // needs several seconds after lid-open wake before frames flow on
+        // freshly-enumerated handles. One-shot re-enumeration misses
+        // whichever device isn't ready yet. Staggered retries cover the
+        // window without needing to detect readiness.
         self.wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
         ) { _ in
-            os_log("System wake — re-enumerating MT devices in 1.5s",
+            os_log("System wake — staggered MT re-enumeration",
                    log: log, type: .info)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: reload)
+            for delay in [1.5, 4.0, 8.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: reload)
+            }
         }
 
         self.actionHandler = actionHandler
