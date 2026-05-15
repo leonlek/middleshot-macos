@@ -56,6 +56,7 @@ build_slice() {
     -framework Cocoa \
     -framework ApplicationServices \
     -framework ServiceManagement \
+    -framework IOKit \
     -o "$out" \
     "${SOURCES[@]}"
 }

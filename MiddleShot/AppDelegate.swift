@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var detector: GestureDetector?
     private var actionHandler: ActionHandler?
     private var mouseTap: MouseClickTap?
+    private var deviceWatcher: DeviceWatcher?
     private var wakeObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -39,13 +40,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             listener?.start()
         }
 
-        // After wake, devices come back at unpredictable times: built-in
-        // trackpad usually within ~1s, Magic Mouse waits on Bluetooth
-        // reconnect (1–6s observed), and MT framework itself sometimes
-        // needs several seconds after lid-open wake before frames flow on
-        // freshly-enumerated handles. One-shot re-enumeration misses
-        // whichever device isn't ready yet. Staggered retries cover the
-        // window without needing to detect readiness.
+        // Wake recovery runs two paths in parallel:
+        //
+        //   1. Staggered reloads at 1.5s / 4s / 8s after wake. Covers the
+        //      device that survives sleep without re-matching in IOKit
+        //      (typically the built-in trackpad — its AppleMultitouchDevice
+        //      service stays present, so no notification fires, but the MT
+        //      handles can be stale until the framework finishes its own
+        //      post-wake settling).
+        //
+        //   2. DeviceWatcher (IOKit kIOMatchedNotification on
+        //      AppleMultitouchDevice). Covers devices that tear down and
+        //      re-register, most importantly Magic Mouse — Bluetooth
+        //      reconnect time is variable and routinely exceeds the 8s
+        //      window above.
+        //
+        // Both call into the same idempotent reload(); a duplicate during
+        // the overlap window is harmless.
         self.wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -58,10 +69,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        let deviceWatcher = DeviceWatcher()
+        deviceWatcher.onDeviceAppeared = {
+            os_log("DeviceWatcher reload", log: log, type: .info)
+            reload()
+        }
+        deviceWatcher.start()
+
         self.actionHandler = actionHandler
         self.detector = detector
         self.listener = listener
         self.mouseTap = mouseTap
+        self.deviceWatcher = deviceWatcher
         self.statusBar = StatusBarController(onReloadDevices: reload)
     }
 
@@ -69,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let obs = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
         }
+        deviceWatcher?.stop()
         listener?.stop()
         mouseTap?.stop()
     }
