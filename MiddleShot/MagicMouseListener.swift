@@ -21,13 +21,34 @@ final class MagicMouseListener {
     /// Invoked on the main queue.
     var onFrame: ((Frame) -> Void)?
 
+    /// Most recent Magic Mouse contact count plus the monotonic time it was
+    /// captured. The capture time lets readers reject a count that has gone
+    /// stale: the MT stream stalls across sleep (the whole reason for the wake
+    /// re-enumeration machinery) and freezes this sample at whatever it last
+    /// held. If that frozen value is >= 3, the click tap would swallow *every*
+    /// left click — including the trackpad's — until a fresh Magic Mouse frame
+    /// finally arrives. A real N-finger rest-and-click streams frames the entire
+    /// time, so the live sample is always fresh (<~20ms) at click time.
+    private struct MouseFingerSample {
+        var count: Int
+        var captureTime: TimeInterval
+    }
+    private let mouseFingerLock =
+        OSAllocatedUnfairLock(initialState: MouseFingerSample(count: 0, captureTime: 0))
+
+    /// A Magic Mouse contact sample older than this is treated as 0 fingers.
+    static let mouseFingerCountMaxAge: TimeInterval = 0.5
+
     /// Magic Mouse finger count, updated synchronously from the MT callback
     /// thread before the frame is dispatched to main. Read by `MouseClickTap`
     /// when a `leftMouseDown` arrives — going through `onFrame` on main would
     /// race the click event if the main runloop hadn't drained the frame yet.
-    private let mouseFingerCountLock = OSAllocatedUnfairLock<Int>(initialState: 0)
+    /// Returns 0 once the last sample exceeds `mouseFingerCountMaxAge`.
     var currentMouseFingerCount: Int {
-        mouseFingerCountLock.withLock { $0 }
+        mouseFingerLock.withLock { sample in
+            let age = ProcessInfo.processInfo.systemUptime - sample.captureTime
+            return age <= MagicMouseListener.mouseFingerCountMaxAge ? sample.count : 0
+        }
     }
 
     private var devices: [MTDeviceRef] = []
@@ -78,6 +99,9 @@ final class MagicMouseListener {
         // second callback for the same device on the next start(); the
         // GestureDetector state machine is idempotent on identical frames.
         devices.removeAll()
+        // Drop any frozen contact sample so a stale >= 3 count can't keep the
+        // click tap intercepting after a reload (e.g. the post-wake re-enumerate).
+        mouseFingerLock.withLock { $0 = MouseFingerSample(count: 0, captureTime: 0) }
     }
 
     fileprivate func handleCallback(device: MTDeviceRef,
@@ -105,7 +129,8 @@ final class MagicMouseListener {
         }
         if kind == .magicMouse {
             let snapshot = contacts
-            mouseFingerCountLock.withLock { $0 = snapshot }
+            let now = ProcessInfo.processInfo.systemUptime
+            mouseFingerLock.withLock { $0 = MouseFingerSample(count: snapshot, captureTime: now) }
         }
         let frame = Frame(
             device: kind,
