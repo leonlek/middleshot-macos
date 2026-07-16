@@ -41,6 +41,36 @@ mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 cp "$SRC_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
 
+# Stamp the build identity into the *bundle's* Info.plist, never the source
+# one — deriving it from git keeps the repo clean (no version churn commit per
+# build) while guaranteeing every binary built from different code carries a
+# different CFBundleVersion. Menu bar → header shows this, so you can tell
+# which build a given machine is running without digging through the bundle.
+#
+# CFBundleVersion must stay a plain integer (macOS parses it), so the commit
+# count carries the ordering and the sha lives in MSGitCommit alongside it.
+if git -C "$PWD" rev-parse --git-dir >/dev/null 2>&1; then
+  BUILD_NUMBER="$(git rev-list --count HEAD)"
+  GIT_COMMIT="$(git rev-parse --short HEAD)"
+  # A dirty tree means the binary does NOT correspond to the named commit —
+  # say so, or you'll chase a "fixed" bug that was never in the build.
+  if ! git diff --quiet HEAD -- 2>/dev/null; then
+    GIT_COMMIT="$GIT_COMMIT-dirty"
+  fi
+else
+  BUILD_NUMBER="0"
+  GIT_COMMIT="nogit"
+fi
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" \
+  "$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :MSGitCommit $GIT_COMMIT" \
+  "$APP_DIR/Contents/Info.plist"
+
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+  "$APP_DIR/Contents/Info.plist")"
+echo "Version $VERSION (build $BUILD_NUMBER, $GIT_COMMIT)"
+
 SOURCES=("$SRC_DIR"/*.swift)
 SDK_PATH="$(xcrun --show-sdk-path)"
 

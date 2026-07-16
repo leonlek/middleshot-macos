@@ -1,32 +1,52 @@
 #!/usr/bin/env bash
-# Builds a universal release and packages it for sharing to other Macs.
+# Builds a universal release and packages it for installing on our other Macs.
 #
-# Output: dist/MiddleShot-<ver>.zip containing MiddleShot.app + INSTALL.txt.
+# Output: dist/MiddleShot-<ver>-b<build>.zip with MiddleShot.app + INSTALL.txt.
 #
-# Note: the bundle is signed with our self-signed cert, which is NOT trusted
-# by Gatekeeper on other Macs, so recipients must clear the quarantine flag on
-# first launch (INSTALL.txt walks through it). Control-click → Open is NOT a
-# way around it — Apple removed that bypass in macOS 15 Sequoia. For a
-# frictionless install, sign with a paid Developer ID Application cert and
-# notarize.
+# Note: the bundle is signed with our self-signed cert, which is NOT trusted by
+# Gatekeeper on a machine that has never seen it, so first launch there needs
+# the quarantine flag cleared (INSTALL.txt walks through it). Control-click →
+# Open is NOT a way around it — Apple removed that bypass in macOS 15 Sequoia.
+# Developer ID + notarization would drop that one-time step, but it buys
+# nothing else for machines we own: the Designated Requirement is pinned to
+# this cert's hash, so TCC grants already survive updates on every machine.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' MiddleShot/Info.plist)"
 DIST_DIR="dist"
-STAGING="$DIST_DIR/MiddleShot-$VERSION"
-ZIP_PATH="$DIST_DIR/MiddleShot-$VERSION.zip"
 
 echo "Building universal release…"
 ./build.sh release universal
+
+# Read the version back out of the BUILT bundle, not the source plist: build.sh
+# stamps CFBundleVersion from git, and the zip name has to carry it so two
+# builds of different code can't land on the same filename (they did before —
+# every build was "MiddleShot-0.1.0.zip" no matter what changed).
+BUILT_PLIST="build/MiddleShot.app/Contents/Info.plist"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$BUILT_PLIST")"
+BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$BUILT_PLIST")"
+GIT_COMMIT="$(/usr/libexec/PlistBuddy -c 'Print :MSGitCommit' "$BUILT_PLIST")"
+
+case "$GIT_COMMIT" in
+  *-dirty)
+    echo "WARNING: building from a dirty tree — this zip will not match any commit." >&2
+    ;;
+esac
+
+NAME="MiddleShot-$VERSION-b$BUILD_NUMBER"
+STAGING="$DIST_DIR/$NAME"
+ZIP_PATH="$DIST_DIR/$NAME.zip"
 
 rm -rf "$STAGING" "$ZIP_PATH"
 mkdir -p "$STAGING"
 cp -R build/MiddleShot.app "$STAGING/"
 
 cat > "$STAGING/INSTALL.txt" <<EOF
-MiddleShot $VERSION — install on macOS 13 (Ventura) or later
+MiddleShot $VERSION (build $BUILD_NUMBER, $GIT_COMMIT) — macOS 13 (Ventura) or later
+
+Verify what a machine ended up with: menu bar icon → the header line shows
+this same version, build number and commit.
 
 1. Drag MiddleShot.app into /Applications
 2. Clear the download quarantine flag, then open it:
@@ -60,7 +80,7 @@ the entries under System Settings → Privacy & Security.
 EOF
 
 echo "Zipping…"
-(cd "$DIST_DIR" && zip -qr "MiddleShot-$VERSION.zip" "MiddleShot-$VERSION")
+(cd "$DIST_DIR" && zip -qr "$NAME.zip" "$NAME")
 rm -rf "$STAGING"
 
 SIZE=$(du -h "$ZIP_PATH" | awk '{print $1}')

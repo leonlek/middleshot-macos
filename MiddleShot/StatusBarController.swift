@@ -35,7 +35,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
 
-        let header = NSMenuItem(title: "MiddleShot", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: Self.versionTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
@@ -69,6 +69,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         menu.addItem(item)
+    }
+
+    /// "MiddleShot 0.2.0 (18 · efde0e6)" — build number and commit are stamped
+    /// by build.sh, so this identifies exactly which binary a machine is on.
+    private static var versionTitle: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let commit = info?["MSGitCommit"] as? String ?? "?"
+        return "MiddleShot \(short) (\(build) · \(commit))"
     }
 
     @objc private func openAccessibility()    { PermissionHelper.openAccessibilitySettings() }
