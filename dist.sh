@@ -4,9 +4,11 @@
 # Output: dist/MiddleShot-<ver>.zip containing MiddleShot.app + INSTALL.txt.
 #
 # Note: the bundle is signed with our self-signed cert, which is NOT trusted
-# by Gatekeeper on other Macs. Recipients must right-click → Open → Open
-# Anyway on first launch. For a frictionless install, sign with a paid
-# Developer ID Application cert and notarize.
+# by Gatekeeper on other Macs, so recipients must clear the quarantine flag on
+# first launch (INSTALL.txt walks through it). Control-click → Open is NOT a
+# way around it — Apple removed that bypass in macOS 15 Sequoia. For a
+# frictionless install, sign with a paid Developer ID Application cert and
+# notarize.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -27,8 +29,19 @@ cat > "$STAGING/INSTALL.txt" <<EOF
 MiddleShot $VERSION — install on macOS 13 (Ventura) or later
 
 1. Drag MiddleShot.app into /Applications
-2. Right-click MiddleShot.app → Open → Open Anyway
-   (Gatekeeper warns once because the app uses a self-signed certificate.)
+2. Clear the download quarantine flag, then open it:
+
+       xattr -dr com.apple.quarantine /Applications/MiddleShot.app
+       open /Applications/MiddleShot.app
+
+   Gatekeeper blocks the app on first launch because it is signed with a
+   self-signed certificate rather than a Developer ID. The command above is
+   the one path that works on every macOS 13+ release. If you would rather
+   click through it:
+     • macOS 15 (Sequoia) and later — double-click, let it be blocked, then
+       System Settings → Privacy & Security → scroll down → "Open Anyway".
+       Control-clicking → Open does NOT work; Apple removed that bypass.
+     • macOS 13–14 — Control-click MiddleShot.app → Open → Open Anyway.
 3. Grant the three permissions when prompted:
    • Accessibility       — to synthesize middle-click events
    • Input Monitoring    — to read multi-touch frames
