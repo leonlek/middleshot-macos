@@ -9,6 +9,10 @@ final class GestureDetector {
     static let trackpadFingerCount = 4
     static let maxTapDuration: TimeInterval = 0.5
     static let interTapGap: TimeInterval = 0.22
+    /// Ceiling on the pause between the two taps of a double tap. Must stay above
+    /// `interTapGap`, or the trackpad's single-tap timer would resolve the gesture
+    /// before a legitimate second tap could land.
+    static let maxInterTapGap: TimeInterval = 0.35
     static let driftThreshold: CGFloat = 0.15  // normalized 0..1 space
 
     private let actionHandler: ActionHandler
@@ -89,6 +93,19 @@ private final class StaticTapRecognizer {
         // counts and only reset on (a) extra finger beyond target, (b) drift,
         // or (c) timeout. Reaching `target` once "arms" each down phase; the
         // release transition is recognized when count returns to 0.
+
+        // Expire a stale gap frame-driven rather than on a timer: the recognizer
+        // without an `onSingleTap` (Magic Mouse) schedules no timer at all, and MT
+        // goes silent once every finger lifts — so the frame that reveals an
+        // over-long gap is the first frame of the *next* touch. Falling through to
+        // the switch afterwards lets that same frame arm a fresh `firstDown`.
+        if phase == .gap {
+            let gap = frame.timestamp - downStart
+            if gap > GestureDetector.maxInterTapGap {
+                trace("gap timeout \(String(format: "%.2f", gap))s", frame: frame)
+                reset()
+            }
+        }
 
         switch phase {
         case .idle:
