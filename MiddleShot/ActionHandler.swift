@@ -52,11 +52,20 @@ final class ActionHandler {
             return
         }
 
-        let dummyPath = (NSTemporaryDirectory() as NSString)
-            .appendingPathComponent("middleshot-screencapture-dummy.png")
+        // The man page claims `-u` ignores the file argument, but that only holds
+        // in *non-interactive* mode. In interactive mode (`-i -u file`) each launch
+        // races two outcomes: either WindowServer's screenshot UI wins → floating
+        // thumbnail + save to the default location (our path ignored), OR the UI
+        // handoff loses → screencapture writes the capture to `file` itself with no
+        // thumbnail. We used to pass a throwaway tmp path, so every time the second
+        // outcome won the screenshot was silently written to tmp and overwritten on
+        // the next trigger — "capture finished but nothing showed, had to redo it".
+        // Passing a real destination on the screenshot folder makes both outcomes
+        // land a usable file there; only the thumbnail is still race-dependent.
+        let destinationPath = screenshotDestinationPath()
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        task.arguments = ["-i", "-u", dummyPath]
+        task.arguments = ["-i", "-u", destinationPath]
         task.terminationHandler = { [weak self] _ in
             // Fires on an arbitrary thread — clear the in-flight marker on main.
             DispatchQueue.main.async { self?.runningCapture = nil }
@@ -64,11 +73,41 @@ final class ActionHandler {
         do {
             try task.run()
             runningCapture = task
-            os_log("Launched screencapture -i -u", log: log, type: .info)
+            os_log("Launched screencapture -i -u %{public}@", log: log, type: .info, destinationPath)
         } catch {
             os_log("Failed to launch screencapture: %{public}@",
                    log: log, type: .error, "\(error)")
         }
+    }
+
+    // Builds a fresh, native-styled save path in the user's configured screenshot
+    // folder, e.g. "~/Desktop/Screenshot 2026-07-21 at 13.49.00.png". Honors the
+    // `location` and `name` keys of com.apple.screencapture (what the Screenshot app
+    // sets), falling back to ~/Desktop and "Screenshot" like the system default. A
+    // uniquifying suffix avoids clobbering an existing file within the same second.
+    private func screenshotDestinationPath() -> String {
+        let capturePrefs = UserDefaults(suiteName: "com.apple.screencapture")
+        let folder = (capturePrefs?.string(forKey: "location") as NSString?)?
+            .expandingTildeInPath
+            ?? (NSSearchPathForDirectoriesInDomains(.desktopDirectory, .userDomainMask, true).first
+                ?? (NSHomeDirectory() as NSString).appendingPathComponent("Desktop"))
+        let prefix = capturePrefs?.string(forKey: "name") ?? "Screenshot"
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let stamp = formatter.string(from: Date())
+
+        let fm = FileManager.default
+        var candidate = (folder as NSString)
+            .appendingPathComponent("\(prefix) \(stamp).png")
+        var counter = 1
+        while fm.fileExists(atPath: candidate) {
+            candidate = (folder as NSString)
+                .appendingPathComponent("\(prefix) \(stamp) (\(counter)).png")
+            counter += 1
+        }
+        return candidate
     }
 
     // NSEvent.mouseLocation is in screen coords with origin bottom-left, while
