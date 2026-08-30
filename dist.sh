@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds a universal release and packages it for installing on our other Macs.
 #
-# Output: dist/MiddleShot-<ver>-b<build>.zip with MiddleShot.app + INSTALL.txt.
+# Output: dist/MiddleShot-<ver>-b<build>.zip with MiddleShot.app + INSTALL.txt,
+# copied to ~/Dropbox/Apps so the other Macs can just pull it out of Dropbox.
+# Override that destination with MIDDLESHOT_PUBLISH_DIR=/somewhere ./dist.sh.
 #
 # Note: the bundle is signed with our self-signed cert, which is NOT trusted by
 # Gatekeeper on a machine that has never seen it, so first launch there needs
@@ -15,6 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 DIST_DIR="dist"
+PUBLISH_DIR="${MIDDLESHOT_PUBLISH_DIR:-$HOME/Dropbox/Apps}"
 
 echo "Building universal release…"
 ./build.sh release universal
@@ -86,5 +89,16 @@ rm -rf "$STAGING"
 SIZE=$(du -h "$ZIP_PATH" | awk '{print $1}')
 echo
 echo "✓ $ZIP_PATH  ($SIZE)"
+
+# Drop a copy where the other Macs can reach it. The zip name carries the build
+# number, so older builds stay put rather than being overwritten — delete the
+# stale ones by hand when you no longer want to be able to roll back to them.
+if [ -d "$PUBLISH_DIR" ]; then
+  cp "$ZIP_PATH" "$PUBLISH_DIR/"
+  echo "✓ published to $PUBLISH_DIR/$NAME.zip"
+else
+  echo "! $PUBLISH_DIR not found — zip is in $DIST_DIR only" >&2
+fi
+
 echo
 echo "Share that zip. Recipient follows INSTALL.txt inside it."
