@@ -7,6 +7,7 @@ private let log = OSLog(subsystem: "app.middleshot", category: "app")
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let launchAtLoginItem: NSMenuItem
+    private let thumbnailItem: NSMenuItem
     private let onReloadDevices: () -> Void
 
     init(onReloadDevices: @escaping () -> Void) {
@@ -15,6 +16,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         launchAtLoginItem = NSMenuItem(
             title: "Launch at Login",
             action: #selector(toggleLaunchAtLogin),
+            keyEquivalent: ""
+        )
+        thumbnailItem = NSMenuItem(
+            title: "Show Screenshot Thumbnail",
+            action: #selector(toggleScreenshotThumbnail),
             keyEquivalent: ""
         )
         super.init()
@@ -42,6 +48,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         launchAtLoginItem.target = self
         menu.addItem(launchAtLoginItem)
+        thumbnailItem.target = self
+        thumbnailItem.toolTip = "Off: the capture saves straight to the "
+            + "screenshot folder (Desktop by default) with no floating preview."
+        menu.addItem(thumbnailItem)
         addItem(to: menu, title: "Reload Devices",
                 action: #selector(reloadDevices))
         menu.addItem(.separator())
@@ -63,6 +73,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        thumbnailItem.state = Settings.showsScreenshotThumbnail ? .on : .off
     }
 
     private func addItem(to menu: NSMenu, title: String, action: Selector) {
@@ -88,6 +99,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func reloadDevices() {
         os_log("Reload Devices requested", log: log, type: .info)
         onReloadDevices()
+    }
+
+    @objc private func toggleScreenshotThumbnail() {
+        let enabled = !Settings.showsScreenshotThumbnail
+        Settings.showsScreenshotThumbnail = enabled
+        thumbnailItem.state = enabled ? .on : .off
+        os_log("Screenshot thumbnail %{public}@",
+               log: log, type: .info, enabled ? "enabled" : "disabled")
     }
 
     @objc private func toggleLaunchAtLogin() {

@@ -33,8 +33,10 @@ final class ActionHandler {
     }
 
     func triggerAreaScreenshot() {
-        // Matches Cmd+Shift+4: save the capture to the system screenshot
-        // location (Desktop by default) and present the floating-thumbnail UI.
+        // Saves the capture to the system screenshot location (Desktop by
+        // default). Whether it also presents the floating-thumbnail UI is the
+        // `Show Screenshot Thumbnail` setting: on, this matches Cmd+Shift+4;
+        // off (the default), the file just lands in the folder silently.
         //
         // Ignore a re-trigger while an interactive capture is still up: stacking
         // a second `screencapture -i` leaves two crosshairs fighting over the
@@ -61,10 +63,16 @@ final class ActionHandler {
         // nothing to silently fall back to: both outcomes now save into the folder
         // configured in com.apple.screencapture, named the way the system names
         // them. `-p` alone does NOT present the thumbnail — `-u` is what asks for
-        // it — so both flags are required.
+        // it — so `-u` is exactly the flag the setting adds or withholds, and
+        // `-i -p` stays the floor in both modes.
+        var arguments = ["-i", "-p"]
+        if Settings.showsScreenshotThumbnail {
+            arguments.insert("-u", at: 1)
+        }
+
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        task.arguments = ["-i", "-u", "-p"]
+        task.arguments = arguments
         task.terminationHandler = { [weak self] _ in
             // Fires on an arbitrary thread — clear the in-flight marker on main.
             DispatchQueue.main.async { self?.runningCapture = nil }
@@ -72,7 +80,8 @@ final class ActionHandler {
         do {
             try task.run()
             runningCapture = task
-            os_log("Launched screencapture -i -u -p", log: log, type: .info)
+            os_log("Launched screencapture %{public}@",
+                   log: log, type: .info, arguments.joined(separator: " "))
         } catch {
             os_log("Failed to launch screencapture: %{public}@",
                    log: log, type: .error, "\(error)")
