@@ -7,6 +7,7 @@ import Foundation
 /// main), so nothing needs to observe anything.
 enum Settings {
     private static let showsScreenshotThumbnailKey = "showsScreenshotThumbnail"
+    private static let copiesScreenshotToClipboardKey = "copiesScreenshotToClipboard"
 
     /// Whether an area screenshot presents the floating thumbnail (`-u`) or
     /// saves straight to the screenshot folder with no UI.
@@ -18,5 +19,23 @@ enum Settings {
     static var showsScreenshotThumbnail: Bool {
         get { UserDefaults.standard.bool(forKey: showsScreenshotThumbnailKey) }
         set { UserDefaults.standard.set(newValue, forKey: showsScreenshotThumbnailKey) }
+    }
+
+    /// Whether a silent capture also lands on the clipboard, ready to paste.
+    ///
+    /// Defaults to **true**, so an unset key has to be told apart from a stored
+    /// `false` — `bool(forKey:)` alone would read both as off.
+    ///
+    /// Has no effect in thumbnail mode: there the file's location is
+    /// screencapture's secret, and the thumbnail can be dragged instead.
+    static var copiesScreenshotToClipboard: Bool {
+        get {
+            let defaults = UserDefaults.standard
+            guard defaults.object(forKey: copiesScreenshotToClipboardKey) != nil else {
+                return true
+            }
+            return defaults.bool(forKey: copiesScreenshotToClipboardKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: copiesScreenshotToClipboardKey) }
     }
 }

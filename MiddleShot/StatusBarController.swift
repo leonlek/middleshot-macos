@@ -4,10 +4,11 @@ import os.log
 
 private let log = OSLog(subsystem: "app.middleshot", category: "app")
 
-final class StatusBarController: NSObject, NSMenuDelegate {
+final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private let statusItem: NSStatusItem
     private let launchAtLoginItem: NSMenuItem
     private let thumbnailItem: NSMenuItem
+    private let copyToClipboardItem: NSMenuItem
     private let onReloadDevices: () -> Void
 
     init(onReloadDevices: @escaping () -> Void) {
@@ -21,6 +22,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         thumbnailItem = NSMenuItem(
             title: "Show Screenshot Thumbnail",
             action: #selector(toggleScreenshotThumbnail),
+            keyEquivalent: ""
+        )
+        copyToClipboardItem = NSMenuItem(
+            title: "Copy Screenshot to Clipboard",
+            action: #selector(toggleCopyToClipboard),
             keyEquivalent: ""
         )
         super.init()
@@ -52,6 +58,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         thumbnailItem.toolTip = "Off: the capture saves straight to the "
             + "screenshot folder (Desktop by default) with no floating preview."
         menu.addItem(thumbnailItem)
+        copyToClipboardItem.target = self
+        copyToClipboardItem.toolTip = "Also put the capture on the clipboard, "
+            + "ready to paste. Unavailable while the thumbnail is shown — drag "
+            + "the thumbnail instead."
+        menu.addItem(copyToClipboardItem)
         addItem(to: menu, title: "Reload Devices",
                 action: #selector(reloadDevices))
         menu.addItem(.separator())
@@ -74,6 +85,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         thumbnailItem.state = Settings.showsScreenshotThumbnail ? .on : .off
+        copyToClipboardItem.state = Settings.copiesScreenshotToClipboard ? .on : .off
+    }
+
+    /// Only silent captures can reach the clipboard — thumbnail mode never
+    /// learns where the file landed — so the copy item greys out rather than
+    /// claiming something the app won't do.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item == copyToClipboardItem ? !Settings.showsScreenshotThumbnail : true
     }
 
     private func addItem(to menu: NSMenu, title: String, action: Selector) {
@@ -106,6 +125,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         Settings.showsScreenshotThumbnail = enabled
         thumbnailItem.state = enabled ? .on : .off
         os_log("Screenshot thumbnail %{public}@",
+               log: log, type: .info, enabled ? "enabled" : "disabled")
+    }
+
+    @objc private func toggleCopyToClipboard() {
+        let enabled = !Settings.copiesScreenshotToClipboard
+        Settings.copiesScreenshotToClipboard = enabled
+        copyToClipboardItem.state = enabled ? .on : .off
+        os_log("Clipboard copy %{public}@",
                log: log, type: .info, enabled ? "enabled" : "disabled")
     }
 

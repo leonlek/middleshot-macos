@@ -33,23 +33,32 @@ Personal-use project. **Not destined for the Mac App Store** — depends on the 
 
 ### Screenshot Mode
 
-Area selection saved to the system screenshot location (Desktop by default). Shells out to **`/usr/sbin/screencapture`** with **`-i -p`** always, plus **`-u`** only when the thumbnail is wanted — and **never a file path**.
+Area selection saved to the system screenshot location (Desktop by default). Two menu bar toggles, persisted in `UserDefaults` via `Settings.swift`, and the first of them picks between two genuinely different `screencapture` invocations:
 
-The floating thumbnail is a menu bar toggle (`Show Screenshot Thumbnail`, persisted in `UserDefaults` via `Settings.swift`), **off by default**: the capture drops into the screenshot folder silently, no preview to wait out. Turned on, it matches Cmd+Shift+4 exactly, and the thumbnail can be dragged straight into any text field (Slack, browser, etc.), which is why there's no separate clipboard copy.
+| `Show Screenshot Thumbnail` | Command | Clipboard |
+| --- | --- | --- |
+| **off (default)** | `screencapture -i <path>` | copied by us, if `Copy Screenshot to Clipboard` is on (**default on**) |
+| on | `screencapture -i -u -p` | not available — drag the thumbnail instead |
 
-Why exactly those flags:
+Silent mode is the default because waiting out the thumbnail is pure latency when the file is going to the screenshot folder regardless. Thumbnail mode is exactly Cmd+Shift+4.
+
+**A path is what suppresses the thumbnail — that is the whole mechanism, in both directions.**
 
 - `-i` alone (and `-i -u`) refuses to start with `no file specified`; it needs *either* a path *or* `-p`.
-- `-p` ("use the default settings for capture; the files argument will be ignored") satisfies that requirement with no path, so the capture always lands in the folder configured in `com.apple.screencapture`, named the way the system names it.
-- `-u` is what asks for the post-capture floating thumbnail. `-i -p` on its own saves silently with **no** thumbnail — verified. That's precisely the silent mode, so the toggle only ever adds or withholds `-u`; `-i -p` stays the floor in both modes.
+- `-p` means "use the default settings for capture", and **those settings include the Screenshot app's own `show-thumbnail` preference**. So `-i -p` presents the thumbnail whenever the user has it enabled, *with no `-u` anywhere*. Measured 2026-09-05 on macOS 15 with `show-thumbnail = 1`: `screencapture -R 0,0,200,200 -p` spawned `screencaptureui` and the file did not appear on disk until the thumbnail expired ~7s later. An earlier note here claimed `-i -p` "saves silently — verified"; it does not, and that wrong line is what made the first cut of the toggle a no-op.
+- `-u` therefore cannot be the toggle. It only *adds* the UI on top of a capture that would already have shown it; it can never take it away.
 
-**Never pass a file path.** The man page's promise that `-u` makes files "passed to the command line be ignored" only holds while the post-capture UI handoff succeeds. When it loses, `screencapture` silently falls back to writing the capture to that path itself, with no thumbnail — and spawned from this app that fallback is what nearly always happened (the "screenshot taken but no thumbnail" bug). The tell is the filename: our own path stamped a Gregorian year (`Screenshot 2026-…`) while the system UI names files in the user's locale (Buddhist era, `Screenshot 2569-…`). With `-p` there is no path to fall back to, so both outcomes save correctly.
+**Thumbnail mode: never pass a file path.** The man page's promise that `-u` makes files "passed to the command line be ignored" only holds while the post-capture UI handoff succeeds. When it loses, `screencapture` silently falls back to writing the capture to that path itself, with no thumbnail — and spawned from this app that fallback is what nearly always happened (the "screenshot taken but no thumbnail" bug). The tell was the filename: our own path stamped a Gregorian year (`Screenshot 2026-…`) while the system UI names files in the user's locale (Buddhist era, `Screenshot 2569-…`). With `-p` there is no path to fall back to.
+
+**Silent mode: always pass a file path**, and drop `-p` — a path means nothing is left to consult `show-thumbnail`. Dropping `-p` also drops the system defaults it was applying for us, so `ScreenshotFile.swift` reads the three that matter back out of the same `com.apple.screencapture` domain (`location`, `name`, `type`) and rebuilds the filename with `Locale.autoupdatingCurrent` — which is what reproduces the Buddhist-era stamp instead of the Gregorian one that gave the old bug away. Cross-domain `UserDefaults(suiteName:)` reads work because the app is not sandboxed.
+
+The clipboard copy is ours, not screencapture's: on a clean exit `ActionHandler` reads the file it named and puts one `NSPasteboardItem` carrying both the image data and its `fileURL`, so editors paste the picture and Finder pastes the file (macOS derives TIFF/JPEG/etc. from the PNG automatically). This is only possible in silent mode — thumbnail mode never learns the path.
 
 **Rejected alternatives (don't relitigate without strong reason):**
 
-- `-i -c` (clipboard-only): no thumbnail appears. `-u` is silently dropped when the capture target is the clipboard because the floating thumbnail needs a saved file to preview/drag.
+- `-i -c` (clipboard-only) as the way to get a clipboard copy: no thumbnail appears *and no file is saved*, so it can serve neither mode. We save a file and copy it ourselves instead.
 - Synthesizing Cmd+Shift+Ctrl+4 via `CGEvent` to get clipboard + thumbnail in one shot: WindowServer's symbolic-hotkey handler ignores synthesized modifier+key events on recent macOS. Tested, never fired.
-- Passing a real destination on the screenshot folder as a "capture never vanishes" safety net (was commit bd9cd6f): it *is* the thing that suppresses the thumbnail. `-p` gives the same safety without the path.
+- Flipping the user's `com.apple.screencapture show-thumbnail` off around each capture so `-p` could stay: races with the Screenshot app, and mutates a system setting the user owns. Naming the file is the honest way to opt out.
 
 Remaining knobs (drift threshold, timing windows) are still compile-time constants; a real Settings window can come later if the menu outgrows itself.
 
@@ -63,7 +72,8 @@ MiddleShot/
 ├── MagicMouseListener.swift   # MultitouchSupport bridge — enumerates Magic Mouse + trackpad
 ├── GestureDetector.swift      # state machines: N-finger click / tap / double-tap
 ├── PermissionHelper.swift     # prompts + status checks for Accessibility / Input / Screen
-├── Settings.swift             # UserDefaults-backed prefs (screenshot thumbnail on/off)
+├── ScreenshotFile.swift       # names the silent capture's destination from com.apple.screencapture
+├── Settings.swift             # UserDefaults-backed prefs (thumbnail, clipboard copy)
 ├── Info.plist
 └── MiddleShot-Bridging-Header.h
 ```

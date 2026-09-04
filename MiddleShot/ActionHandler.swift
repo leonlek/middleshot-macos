@@ -1,4 +1,5 @@
 import Cocoa
+import UniformTypeIdentifiers
 import os.log
 
 private let log = OSLog(subsystem: "app.middleshot", category: "action")
@@ -34,9 +35,8 @@ final class ActionHandler {
 
     func triggerAreaScreenshot() {
         // Saves the capture to the system screenshot location (Desktop by
-        // default). Whether it also presents the floating-thumbnail UI is the
-        // `Show Screenshot Thumbnail` setting: on, this matches Cmd+Shift+4;
-        // off (the default), the file just lands in the folder silently.
+        // default). The `Show Screenshot Thumbnail` setting picks between two
+        // genuinely different invocations — see the comment on each below.
         //
         // Ignore a re-trigger while an interactive capture is still up: stacking
         // a second `screencapture -i` leaves two crosshairs fighting over the
@@ -47,35 +47,47 @@ final class ActionHandler {
             return
         }
 
-        // NEVER pass a file path here. `screencapture -i` refuses to start with
-        // `no file specified` unless it is given either a path or `-p`, and the
-        // man page's promise that `-u` makes it "ignore files passed to the
-        // command line" only holds when the post-capture UI handoff succeeds. If
-        // that handoff loses, screencapture quietly falls back to writing the
-        // capture to the path itself — no thumbnail. Spawned from this app that
-        // fallback is what almost always happened, which is exactly the "capture
-        // finished but no thumbnail appeared" bug; the tell was the filename,
-        // because our own path was stamped with a Gregorian year while the system
-        // UI names its files in the user's locale (e.g. Buddhist-era 2569).
+        let destination: URL? = Settings.showsScreenshotThumbnail
+            ? nil
+            : ScreenshotFile.nextURL()
+
+        // Thumbnail mode: NEVER pass a file path. `screencapture -i` refuses to
+        // start with `no file specified` unless it is given either a path or
+        // `-p`, and the man page's promise that `-u` makes it "ignore files
+        // passed to the command line" only holds when the post-capture UI
+        // handoff succeeds. If that handoff loses, screencapture quietly falls
+        // back to writing the capture to the path itself — no thumbnail. Spawned
+        // from this app that fallback is what almost always happened, which is
+        // exactly the "capture finished but no thumbnail appeared" bug. `-p`
+        // ("use the default settings for capture; the files argument will be
+        // ignored") satisfies the argument parser with no path at all, so there
+        // is nothing to silently fall back to.
         //
-        // `-p` ("use the default settings for capture; the files argument will be
-        // ignored") satisfies the argument parser with no path at all, so there is
-        // nothing to silently fall back to: both outcomes now save into the folder
-        // configured in com.apple.screencapture, named the way the system names
-        // them. `-p` alone does NOT present the thumbnail — `-u` is what asks for
-        // it — so `-u` is exactly the flag the setting adds or withholds, and
-        // `-i -p` stays the floor in both modes.
-        var arguments = ["-i", "-p"]
-        if Settings.showsScreenshotThumbnail {
-            arguments.insert("-u", at: 1)
-        }
+        // Silent mode: a path is precisely what we want, because a path is what
+        // suppresses the thumbnail. `-p` cannot do this job — "default settings"
+        // includes the Screenshot app's own `show-thumbnail` preference, so
+        // `-i -p` hands off to screencaptureui and presents the thumbnail even
+        // with no `-u` (measured: the file did not appear on disk until the
+        // thumbnail expired ~7s later). Dropping `-p` means dropping the system
+        // defaults it applied for us, so ScreenshotFile reads the ones that
+        // matter — folder, name prefix, format — back out of the same domain.
+        let arguments = destination.map { ["-i", $0.path] } ?? ["-i", "-u", "-p"]
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         task.arguments = arguments
-        task.terminationHandler = { [weak self] _ in
-            // Fires on an arbitrary thread — clear the in-flight marker on main.
-            DispatchQueue.main.async { self?.runningCapture = nil }
+        task.terminationHandler = { [weak self] process in
+            // Fires on an arbitrary thread — back to main for the marker and for
+            // the pasteboard. A non-zero status is the ordinary "user pressed
+            // Escape" path, so it is not logged as an error.
+            let captured = process.terminationStatus == 0
+            DispatchQueue.main.async {
+                self?.runningCapture = nil
+                if captured, let destination,
+                   Settings.copiesScreenshotToClipboard {
+                    self?.copyToPasteboard(destination)
+                }
+            }
         }
         do {
             try task.run()
@@ -86,6 +98,31 @@ final class ActionHandler {
             os_log("Failed to launch screencapture: %{public}@",
                    log: log, type: .error, "\(error)")
         }
+    }
+
+    /// Puts the just-saved capture on the pasteboard as one item carrying both
+    /// the image bytes and its file URL, so an editor pastes the picture while
+    /// Finder and file-upload fields paste the file.
+    ///
+    /// Only silent mode can do this: thumbnail mode never learns where
+    /// screencapture put the file (that is the whole point of `-p`), and the
+    /// thumbnail is itself draggable, which is the same job by other means.
+    private func copyToPasteboard(_ url: URL) {
+        guard let data = try? Data(contentsOf: url) else {
+            os_log("Capture not readable for pasteboard: %{public}@",
+                   log: log, type: .error, url.path)
+            return
+        }
+        let type = UTType(filenameExtension: url.pathExtension) ?? .png
+        let item = NSPasteboardItem()
+        item.setData(data, forType: NSPasteboard.PasteboardType(type.identifier))
+        item.setString(url.absoluteString, forType: .fileURL)
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
+        os_log("Copied capture to clipboard (%{public}@, %d bytes)",
+               log: log, type: .info, type.identifier, data.count)
     }
 
     // NSEvent.mouseLocation is in screen coords with origin bottom-left, while
