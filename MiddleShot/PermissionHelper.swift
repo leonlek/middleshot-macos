@@ -57,6 +57,12 @@ enum PermissionHelper {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
     }
 
+    /// Not requested at launch — only the dashboard's Entire Disk scan wants it,
+    /// and it works (with folders skipped) without.
+    static func openFullDiskAccessSettings() {
+        open("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+    }
+
     private static func open(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)

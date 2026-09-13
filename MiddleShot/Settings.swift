@@ -8,6 +8,15 @@ import Foundation
 enum Settings {
     private static let showsScreenshotThumbnailKey = "showsScreenshotThumbnail"
     private static let copiesScreenshotToClipboardKey = "copiesScreenshotToClipboard"
+    private static let dashboardTabKey = "dashboardTab"
+    private static let diskScanScopeKey = "diskScanScope"
+    private static let showsAllProcessesKey = "showsAllProcesses"
+    private static let diskShowsCleanupKey = "diskShowsCleanup"
+    private static let menuBarModuleOrderKey = "menuBarModuleOrder"
+    private static let menuBarModulesEnabledKey = "menuBarModulesEnabled"
+    private static let menuBarStatsStyleKey = "menuBarStatsStyle"
+    private static let menuBarColorGraphsKey = "menuBarColorGraphs"
+    private static let menuBarUpdateIntervalKey = "menuBarUpdateInterval"
 
     /// Whether an area screenshot presents the floating thumbnail (`-u`) or
     /// saves straight to the screenshot folder with no UI.
@@ -37,5 +46,95 @@ enum Settings {
             return defaults.bool(forKey: copiesScreenshotToClipboardKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: copiesScreenshotToClipboardKey) }
+    }
+
+    /// The dashboard tab that was showing when the window last closed:
+    /// 0 is Disk, 1 is CPU & Memory.
+    static var dashboardTab: Int {
+        get { UserDefaults.standard.integer(forKey: dashboardTabKey) }
+        set { UserDefaults.standard.set(newValue, forKey: dashboardTabKey) }
+    }
+
+    /// What the Disk tab scans. Defaults to the home folder — fast, and needs
+    /// no Full Disk Access to be mostly complete.
+    static var diskScanScope: DiskScanScope {
+        get {
+            UserDefaults.standard.string(forKey: diskScanScopeKey)
+                .flatMap(DiskScanScope.init(rawValue:)) ?? .home
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: diskScanScopeKey) }
+    }
+
+    /// Whether the CPU & Memory tab lists every process instead of apps with
+    /// their helpers folded in. Defaults to false (apps).
+    static var showsAllProcesses: Bool {
+        get { UserDefaults.standard.bool(forKey: showsAllProcessesKey) }
+        set { UserDefaults.standard.set(newValue, forKey: showsAllProcessesKey) }
+    }
+
+    /// Whether the Disk tab shows Safe to Clean instead of Largest Items.
+    static var diskShowsCleanup: Bool {
+        get { UserDefaults.standard.bool(forKey: diskShowsCleanupKey) }
+        set { UserDefaults.standard.set(newValue, forKey: diskShowsCleanupKey) }
+    }
+
+    // MARK: - Menu bar stats
+
+    /// Module ids, left to right in the menu bar (top to bottom in its menu).
+    /// Modules missing from the list — new ones — go after the listed ones.
+    static var menuBarModuleOrder: [String] {
+        get { UserDefaults.standard.stringArray(forKey: menuBarModuleOrderKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: menuBarModuleOrderKey) }
+    }
+
+    static func isMenuBarModuleEnabled(_ id: String, default fallback: Bool) -> Bool {
+        let stored = UserDefaults.standard.dictionary(forKey: menuBarModulesEnabledKey) as? [String: Bool] ?? [:]
+        if let enabled = stored[id] { return enabled }
+        // Before modules were reorderable each had its own on/off key.
+        if let legacy = legacyShowKeys[id], UserDefaults.standard.object(forKey: legacy) != nil {
+            return UserDefaults.standard.bool(forKey: legacy)
+        }
+        return fallback
+    }
+
+    static func setMenuBarModule(_ id: String, enabled: Bool) {
+        var stored = UserDefaults.standard.dictionary(forKey: menuBarModulesEnabledKey) as? [String: Bool] ?? [:]
+        stored[id] = enabled
+        UserDefaults.standard.set(stored, forKey: menuBarModulesEnabledKey)
+    }
+
+    private static let legacyShowKeys = [
+        "cpu": "menuBarShowsCPU", "memory": "menuBarShowsMemory",
+        "network": "menuBarShowsNetwork", "disk": "menuBarShowsDisk",
+    ]
+
+    static var menuBarStatsStyle: MenuBarStatsStyle {
+        get {
+            UserDefaults.standard.string(forKey: menuBarStatsStyleKey)
+                .flatMap(MenuBarStatsStyle.init(rawValue:)) ?? .graphsAndNumbers
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: menuBarStatsStyleKey) }
+    }
+
+    /// Colored graphs by default; off draws everything in the menu bar's own
+    /// ink, like system icons.
+    static var menuBarColorGraphs: Bool {
+        get { bool(menuBarColorGraphsKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: menuBarColorGraphsKey) }
+    }
+
+    /// Seconds between readings. 1 s by default — what menu bar monitors such as
+    /// Stats ship with; 2 and 5 trade smoothness for a little less work.
+    static var menuBarUpdateInterval: TimeInterval {
+        get {
+            let stored = UserDefaults.standard.double(forKey: menuBarUpdateIntervalKey)
+            return [1, 2, 5].contains(stored) ? stored : 1
+        }
+        set { UserDefaults.standard.set(newValue, forKey: menuBarUpdateIntervalKey) }
+    }
+
+    /// An unset key reads as `fallback` rather than false.
+    private static func bool(_ key: String, default fallback: Bool) -> Bool {
+        UserDefaults.standard.object(forKey: key) == nil ? fallback : UserDefaults.standard.bool(forKey: key)
     }
 }

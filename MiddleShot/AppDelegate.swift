@@ -5,6 +5,7 @@ private let log = OSLog(subsystem: "app.middleshot", category: "app")
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBarController?
+    private let menuBarStats = MenuBarStatsController()
     private var listener: MagicMouseListener?
     private var detector: GestureDetector?
     private var actionHandler: ActionHandler?
@@ -81,7 +82,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.listener = listener
         self.mouseTap = mouseTap
         self.deviceWatcher = deviceWatcher
-        self.statusBar = StatusBarController(onReloadDevices: reload)
+        let statusBar = StatusBarController(menuBarStats: menuBarStats, onReloadDevices: reload)
+        self.statusBar = statusBar
+        // Created after MiddleShot's own item, so it sits to its left.
+        menuBarStats.onOpenDashboard = { [weak statusBar] in statusBar?.showDashboard() }
+        menuBarStats.onOpenSafeToClean = { [weak statusBar] in statusBar?.showSafeToClean() }
+        menuBarStats.cleanupSummary = { [weak statusBar] in statusBar?.cleanupSummary }
+        menuBarStats.apply()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

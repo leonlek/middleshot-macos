@@ -36,11 +36,15 @@
          what TCC prompts for, so the folders it can plausibly be set to need a
          reason string here. -->
     <key>NSDesktopFolderUsageDescription</key>
-    <string>MiddleShot saves your screenshots to the Desktop and copies them to the clipboard.</string>
+    <string>MiddleShot saves your screenshots to the Desktop, and measures this folder when you scan disk usage in the Dashboard.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>MiddleShot saves your screenshots to the folder you chose in the Screenshot app and copies them to the clipboard.</string>
+    <string>MiddleShot saves your screenshots to the folder you chose in the Screenshot app, and measures this folder when you scan disk usage in the Dashboard.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>MiddleShot saves your screenshots to the folder you chose in the Screenshot app and copies them to the clipboard.</string>
+    <string>MiddleShot saves your screenshots to the folder you chose in the Screenshot app, and measures this folder when you scan disk usage in the Dashboard.</string>
+    <!-- The Dashboard's disk scan walks the home folder, which reaches into
+         cloud-synced folders (Dropbox, iCloud Drive) served by File Provider. -->
+    <key>NSFileProviderDomainUsageDescription</key>
+    <string>MiddleShot measures how much space synced folders use when you scan disk usage in the Dashboard. It does not read or upload file contents.</string>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 MiddleShot</string>
 </dict>

@@ -5,6 +5,8 @@ macOS menu-bar utility that adds two missing features to Magic Mouse and MacBook
 1. **Middle click** — bound to a finger-count gesture
 2. **Area screenshot** (equivalent of `Cmd+Shift+4`) — bound to a different gesture
 
+Plus a **Dashboard** window (menu → Open Dashboard…) for disk usage and CPU / memory, and **Menu Bar Stats** (CPU, memory, network as a live status item) — see their sections below.
+
 ## Status
 
 Personal-use project. **Not destined for the Mac App Store** — depends on the private `MultitouchSupport` framework. Build, sign with Developer ID, notarize, sideload.
@@ -73,10 +75,61 @@ MiddleShot/
 ├── GestureDetector.swift      # state machines: N-finger click / tap / double-tap
 ├── PermissionHelper.swift     # prompts + status checks for Accessibility / Input / Screen
 ├── ScreenshotFile.swift       # names the silent capture's destination from com.apple.screencapture
-├── Settings.swift             # UserDefaults-backed prefs (thumbnail, clipboard copy)
+├── Settings.swift             # UserDefaults-backed prefs (thumbnail, clipboard, dashboard)
+├── DashboardWindowController.swift  # Dashboard window, toolbar, Dock/menu-bar policy switch
+├── DashboardViews.swift       # shared dashboard views (bars, chips, placeholder, toast)
+├── DiskUsageViewController.swift    # Disk tab — top 10 items, Move to Trash + Undo
+├── DiskScanner.swift          # parallel folder walk, "largest items" rule, safety labels
+├── ProcessesViewController.swift    # CPU & Memory tab — top 10 apps/processes, Force Quit
+├── ProcessSampler.swift       # libproc/mach sampling, app grouping, force quit
+├── CleanupFinder.swift        # Safe to Clean groups (caches, simulators, build output) + simctl
+├── CleanupListController.swift      # Safe to Clean outline view
+├── SystemStats.swift          # whole-machine CPU ticks, memory, network + disk counters, disk space
+├── MenuBarStatsController.swift     # stats status item: module order/visibility, timer, dropdown, submenu
+├── MenuBarModule.swift        # MenuBarModule protocol + dropdown building blocks + history chart
+├── MenuBarModules.swift       # CPU, Memory, Network, Disk modules
+├── MenuBarDrawing.swift       # shared menu bar geometry, formatting, drawing primitives
+├── MenuBarStatsSettingsWindowController.swift  # drag-to-reorder / show-hide window
 ├── Info.plist
 └── MiddleShot-Bridging-Header.h
 ```
+
+## Dashboard
+
+Two tabs — **Disk** and **CPU & Memory** — each showing a top-10 list with a destructive action per row. Decisions (from the user, 2026-09-13 — don't relitigate):
+
+- **Never refreshes on its own.** No scan or sample runs until Refresh (⌘R) or the empty state's button is pressed — not even on first open. While working, Refresh becomes **Stop** (⌘.); stopping keeps the previous results. Only the "Updated 14:32 · 3 min ago" text ticks (turns orange at 10 min).
+- **Dock / ⌘-Tab while open.** Opening switches `NSApp` to `.regular` (drawn Dock icon + a minimal main menu); closing returns to `.accessory` and stops any running scan. The controller lives for the app's lifetime, so results survive closing the window.
+- **Disk scope is selectable:** Home Folder (default) or Entire Disk, each keeping its own last result. Skipped (no-access) folders are counted, with a link to Full Disk Access — the app never requires it.
+- **CPU & Memory:** Apps (default — helpers folded into their app by bundle path or parent chain) or All Processes. In Apps mode an app row expands: **VS Code-family editors split into one row per window and per Claude Code session**, each with its own Force Quit (a window's = its extension host subtree + terminal programs working inside its folder; the window itself stays open). A window has no id on its extension host (`… Helper (Plugin)` child of the main process), so it is named after the most common working folder (`PROC_PIDVNODEPATHINFO`) of its processes. Main process / renderers / GPU form a "Shared" group that is never force quit piecemeal. Group Force Quit re-checks every PID's start time and kills children first. Root-owned processes can't be measured without privileges (`proc_pid_rusage` fails), so they are left out and counted in the status line rather than shown as zeros.
+- **Removal is Move to Trash** (`FileManager.trashItem`) with an Undo toast — never a permanent delete. Force Quit uses `NSRunningApplication.forceTerminate()` for apps, `SIGKILL` otherwise.
+- **Always confirm.** Sheets use `hasDestructiveAction`; macOS then assigns no default button, so **Return does nothing and Escape cancels**. Don't bind Return to Cancel by hand — a button holds one key equivalent, and Escape stops working (tested).
+- **Protected rows get no button:** macOS paths, standard home folders (Desktop, Library, …), Homebrew (`/opt/homebrew`, `/usr/local`), MiddleShot's bundle, `CoreSimulator/Devices` as a whole, synced-folder roots (Dropbox, CloudStorage, Mobile Documents), anything the user can't delete, `/System`-path processes that aren't apps, and MiddleShot and its child processes.
+- **Removal safety (audited 2026-09-13):** nothing is removed without a click + confirmation. `classify` runs protection rules first, then app/tool data, and only then "Rebuildable" — `node_modules`/`Pods`/`.build` are rebuildable only with their marker file beside them; `*/lib/node_modules` and `~/.gradle` are "Review first". **Every path is re-checked at the moment of trashing** (`DiskScanner.refusalReason`: gone, now a symlink, a parent now a link, now protected, or a running app). An entry with several files (emulator `.avd` + `.ini`) moves all-or-nothing. **Force Quit re-verifies the PID's start time** so a reused PID is never signalled. Permanent groups (simulators, runtimes) never get "Clean All" — only "Clean Recommended" or per-row Delete. Unknown simulator folders are never recommended.
+
+- **Safe to Clean** is a second view of the same scan (`CleanupFinder`): only locations a tool recreates on its own, grouped and expandable, with a "Recommended" reason per item. Simulators and runtimes go through `xcrun simctl delete` / `simctl runtime delete` — **permanent**, and the sheet says so; everything else is Move to Trash with Undo. A project folder (node_modules, Pods, build, …) only counts when its marker file (package.json, Podfile, build.gradle, …) sits next to it, and never under ~/Library or a dot-folder (a node_modules in ~/.vscode belongs to an installed tool).
+
+Disk scan notes (`DiskScanner.swift`):
+
+- "Largest items" = for a threshold S, the deepest items still ≥ S (none of their children is), with S lowered by binary search until 10 qualify — non-overlapping by construction. *Atomic* folders (DerivedData, node_modules, Caches, packages, …) count as one item; *container* folders (Library, Application Support, /Applications, …) never qualify themselves.
+- The walk is I/O-bound (`du -sk ~` is as slow as one FileManager enumerator: ~160 s for 2M files here), so the top two levels are listed serially and everything below is walked with `concurrentPerform` → ~25–40 s.
+- Entire Disk must skip `/System/Volumes`, `/Volumes`, and the root mirrors `/.nofollow`, `/.resolve`, `/.vol`, plus anything on another volume — otherwise the Data volume is counted two or three times. **FileManager reports `/.nofollow` as `"/.nofollow/"` (trailing slash)**, so compare normalized paths.
+
+## Menu Bar Stats
+
+One status item (left of MiddleShot's own) built from **modules** — Network, Memory, CPU, Disk today; more coming (e.g. Magic Mouse battery). Decisions from the user, 2026-09-13:
+
+- **One combined item**, not one per metric. Modules can be **reordered (drag) and shown/hidden (checkbox)** in "Reorder & Customize…"; order is left→right in the bar and top→bottom in the dropdown. Hiding all removes the item.
+- **Adding a stat = one class conforming to `MenuBarModule`** (id, title, symbol, `sample`, `part(style:color:)`, `menuSection`, …) plus one line in `MenuBarStatsController.modules`. Order/visibility live in `Settings.menuBarModuleOrder` / `menuBarModulesEnabled` keyed by module `id` — never rename an id. Only shown modules sample.
+- **Disk** shows free space on the startup disk (GB, bar turns orange < 10 % free, red < 5 %; re-read every 30 s and on menu open). External drives appear **only in the dropdown**, along with read/write rates (IOBlockStorageDriver statistics, disk images excluded) and the Dashboard's last Safe to Clean total.
+- **All three styles selectable** — Graphs & Numbers (iStat-like), Numbers Only, Icons Only (the same full-size icons without the MEM/CPU labels; network keeps its rates, the user wants to see how much is used) — plus Color Graphs on/off (off = template image, tinted by macOS).
+- **Refreshes itself every 1 s by default** (2 / 5 s selectable) — the one deliberate exception to the Dashboard's manual refresh. Each tick is only `host_statistics`, `host_statistics64`, and one `NET_RT_IFLIST2` sysctl; the per-process sample behind "Using the most CPU/memory" runs only while the dropdown is open.
+- **Network counts `en*` only** — no VPN (`utun*`), since tunnelled traffic already crosses a physical port. Use `NET_RT_IFLIST2` (`if_msghdr2` / 64-bit `if_data64`); `getifaddrs`' `if_data` is 32-bit and wraps at 4 GB.
+- **Every part of the image has a fixed width** measured against its widest value, so changing numbers never shift other menu bar icons.
+- **Rendering cost:** measured on this Mac (M-series, release build): stats off 0.2 % of one core / 15 MB; on at 1 s ≈ 2.4 % / 21 MB; at 2 s ≈ 1.6 %. Most of it is macOS re-compositing the status item (vImage blur, CA commit) on every image change, not our readings. The image is drawn once into a bitmap and skipped entirely when every part's `key` is unchanged. **Don't force a redraw from the button's `effectiveAppearance` KVO** — setting the image fires it, and a forced redraw there looped at 56 % CPU.
+- **Everything shares one vertical band** (`bandBottom`…`bandTop` in the renderer): icon tops and cap tops meet the top, icon bottoms and the lowest baselines meet the bottom. Text is placed by baseline (`draw(at:)` origin = baseline + descender), never by eyeballed y offsets.
+- **Nothing clickable inside the dropdown's custom views** — clicks on views in an `NSMenuItem.view` aren't delivered reliably (tested: a row view never got its click). Actions are real menu items from `MenuBarModule.actionMenuItems()` (e.g. Disk's "Safe to Clean · 84 GB"), inserted above "Open Dashboard…".
+- Clicking opens the detail dropdown (60-sample graphs with hover readouts, memory breakdown, top apps, Open Dashboard…, and the same settings submenu as MiddleShot's menu). The timer runs in `.common` mode so it keeps updating while the menu is tracked.
 
 ## Private Framework Usage
 

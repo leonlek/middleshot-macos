@@ -10,8 +10,11 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
     private let thumbnailItem: NSMenuItem
     private let copyToClipboardItem: NSMenuItem
     private let onReloadDevices: () -> Void
+    /// Created on first use and kept for the life of the app, so closing the
+    /// window keeps the last scan and snapshot around for next time.
+    private var dashboard: DashboardWindowController?
 
-    init(onReloadDevices: @escaping () -> Void) {
+    init(menuBarStats: MenuBarStatsController, onReloadDevices: @escaping () -> Void) {
         self.onReloadDevices = onReloadDevices
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         launchAtLoginItem = NSMenuItem(
@@ -50,6 +53,13 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         let header = NSMenuItem(title: Self.versionTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
+        menu.addItem(.separator())
+
+        addItem(to: menu, title: "Open Dashboard…",
+                action: #selector(openDashboard))
+        let statsItem = NSMenuItem(title: "Menu Bar Stats", action: nil, keyEquivalent: "")
+        statsItem.submenu = menuBarStats.makeSettingsMenu()
+        menu.addItem(statsItem)
         menu.addItem(.separator())
 
         launchAtLoginItem.target = self
@@ -114,6 +124,31 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
     @objc private func openAccessibility()    { PermissionHelper.openAccessibilitySettings() }
     @objc private func openInputMonitoring()  { PermissionHelper.openInputMonitoringSettings() }
     @objc private func openScreenRecording()  { PermissionHelper.openScreenRecordingSettings() }
+
+    @objc private func openDashboard() {
+        showDashboard()
+    }
+
+    func showDashboard() {
+        loadedDashboard().show()
+    }
+
+    func showSafeToClean() {
+        loadedDashboard().showSafeToClean()
+    }
+
+    /// Nil until the Dashboard has been opened — and so until anything has been
+    /// scanned; asking must not build a window just to find no results.
+    var cleanupSummary: (size: Int64, finishedAt: Date)? {
+        dashboard?.cleanupSummary
+    }
+
+    private func loadedDashboard() -> DashboardWindowController {
+        if let dashboard { return dashboard }
+        let created = DashboardWindowController()
+        dashboard = created
+        return created
+    }
 
     @objc private func reloadDevices() {
         os_log("Reload Devices requested", log: log, type: .info)
