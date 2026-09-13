@@ -31,8 +31,25 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
     private let cpuAlert = CPUAlertMonitor()
     private var alertPopover: NSPopover?
     private let alertContent = CPUAlertViewController()
-    /// Where the CPU graph sits inside the status button, for anchoring the bubble.
-    private var cpuPartSpan: (x: CGFloat, width: CGFloat, imageWidth: CGFloat)?
+    /// Where each module's part sits in the menu bar image, for anchoring
+    /// bubbles and working out which part the pointer is over.
+    private var partSpans: [(module: MenuBarModule, x: CGFloat, width: CGFloat)] = []
+    private var imageWidth: CGFloat = 0
+
+    private static let hoverShowDelay: TimeInterval = 0.4
+    private static let hoverHideDelay: TimeInterval = 0.3
+    /// Global + local mouse-moved monitors while the item exists.
+    private var mouseMonitors: [Any] = []
+    private var pointerInsideItem = false
+    /// Set when the menu closes with the pointer still on the item: no bubble
+    /// until the pointer has left, or closing the menu would summon one.
+    private var hoverSuppressedUntilExit = false
+    private let hoverContent = HoverPopoverContent()
+    private var hoverPopover: NSPopover?
+    private var hoverModule: MenuBarModule?
+    private var hoverShowWork: DispatchWorkItem?
+    private var hoverHideWork: DispatchWorkItem?
+    private var hoverSampler: ProcessSampler?
 
     private static let timelineCapacity = 60
 
@@ -120,9 +137,11 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
     /// Creates, updates or removes the status item to match Settings.
     func apply() {
         let shown = shownModules
+        closeHover()
         guard !shown.isEmpty else {
             stopTimer()
             cpuAlert.stop()
+            stopHoverMonitoring()
             if let statusItem {
                 appearanceObservation = nil
                 NSStatusBar.system.removeStatusItem(statusItem)
@@ -135,6 +154,7 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
             item.autosaveName = "MenuBarStats"
             item.button?.imagePosition = .imageOnly
             item.menu = makeMenu()
+            startHoverMonitoring()
             // The bitmap bakes in label colors, so a light/dark menu bar switch
             // needs a fresh one.
             // Setting a new image also reports an appearance "change", so this
@@ -192,7 +212,13 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
         render(shown)
         if isMenuOpen {
             updateSections(shown)
+        } else if let hoverModule, hoverPopover != nil {
+            hoverModule.updateMenuSection(timeline)
         }
+    }
+
+    private var timeline: MenuBarTimeline {
+        MenuBarTimeline(interval: Settings.menuBarUpdateInterval, capacity: Self.timelineCapacity)
     }
 
     private func render(_ shown: [MenuBarModule]) {
@@ -201,10 +227,10 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
         let style = Settings.menuBarStatsStyle
         let parts = shown.map { $0.part(style: style, color: color) }
         var x: CGFloat = 0
-        cpuPartSpan = nil
-        let imageWidth = ceil(parts.reduce(0) { $0 + $1.width } + MenuBarDrawing.partGap * CGFloat(max(parts.count - 1, 0)))
+        partSpans = []
+        imageWidth = ceil(parts.reduce(0) { $0 + $1.width } + MenuBarDrawing.partGap * CGFloat(max(parts.count - 1, 0)))
         for (module, part) in zip(shown, parts) {
-            if module === cpu { cpuPartSpan = (x, part.width, imageWidth) }
+            partSpans.append((module, x, part.width))
             x += part.width + MenuBarDrawing.partGap
         }
         let appearance = button.effectiveAppearance
@@ -217,7 +243,7 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
     }
 
     private func updateSections(_ shown: [MenuBarModule]) {
-        let timeline = MenuBarTimeline(interval: Settings.menuBarUpdateInterval, capacity: Self.timelineCapacity)
+        let timeline = self.timeline
         shown.forEach { $0.updateMenuSection(timeline) }
     }
 
@@ -241,6 +267,8 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
+        // The click wins: the bubble goes and its section returns to the menu.
+        closeHover()
         isMenuOpen = true
         let shown = shownModules
         shown.forEach { $0.menuWillOpen() }
@@ -264,6 +292,7 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
         isMenuOpen = false
+        hoverSuppressedUntilExit = pointerInsideItem
         processSampler?.cancel()
         processSampler = nil
         modules.forEach { $0.menuDidClose() }
@@ -294,6 +323,7 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
 
     private func showCPUAlert(_ hog: CPUHog?) {
         let alerting = hog != nil
+        if alerting { closeHover() }
         if cpu.isAlerting != alerting {
             cpu.isAlerting = alerting
             render(shownModules)
@@ -317,9 +347,143 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
 
     /// The CPU graph's slice of the button; the whole button if CPU is hidden.
     private func anchorRect(in button: NSStatusBarButton) -> NSRect {
-        guard let span = cpuPartSpan else { return button.bounds }
-        let imageLeft = (button.bounds.width - span.imageWidth) / 2
+        rect(for: cpu, in: button) ?? button.bounds
+    }
+
+    private func rect(for module: MenuBarModule, in button: NSStatusBarButton) -> NSRect? {
+        guard let span = partSpans.first(where: { $0.module === module }) else { return nil }
+        let imageLeft = (button.bounds.width - imageWidth) / 2
         return NSRect(x: imageLeft + span.x, y: button.bounds.minY, width: span.width, height: button.bounds.height)
+    }
+
+    // MARK: - Hover
+
+    /// On macOS 26 status items are drawn by Control Center in another
+    /// process, so a tracking area on the button never hears the pointer.
+    /// Watching mouse-moved events (global for other apps, local for ours) and
+    /// testing them against the item's screen frame does — and costs one
+    /// rectangle check per movement.
+    private func startHoverMonitoring() {
+        guard mouseMonitors.isEmpty else { return }
+        hoverContent.onEnter = { [weak self] in self?.hoverHideWork?.cancel() }
+        hoverContent.onExit = { [weak self] in self?.pointerLeft() }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] _ in
+            self?.mouseMoved()
+        }) {
+            mouseMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] event in
+            self?.mouseMoved()
+            return event
+        }) {
+            mouseMonitors.append(local)
+        }
+    }
+
+    private func stopHoverMonitoring() {
+        mouseMonitors.forEach(NSEvent.removeMonitor)
+        mouseMonitors.removeAll()
+        pointerInsideItem = false
+    }
+
+    private func mouseMoved() {
+        guard let button = statusItem?.button, let window = button.window else { return }
+        let point = NSEvent.mouseLocation
+        let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
+        if frame.contains(point) {
+            pointerInsideItem = true
+            pointerMoved(toScreenX: point.x - frame.minX)
+        } else if pointerInsideItem {
+            pointerInsideItem = false
+            hoverSuppressedUntilExit = false
+            pointerLeft()
+        }
+    }
+
+    private func pointerMoved(toScreenX buttonX: CGFloat) {
+        guard !isMenuOpen, !hoverSuppressedUntilExit, alertPopover == nil, let button = statusItem?.button else { return }
+        hoverHideWork?.cancel()
+        let x = buttonX - (button.bounds.width - imageWidth) / 2
+        // Between two parts: leave whatever is showing (or pending) alone.
+        guard let module = partSpans.first(where: { x >= $0.x - MenuBarDrawing.partGap / 2
+            && x <= $0.x + $0.width + MenuBarDrawing.partGap / 2 })?.module else { return }
+        if hoverPopover != nil {
+            if module !== hoverModule { showHover(for: module) }
+            return
+        }
+        guard module !== hoverModule || hoverShowWork == nil else { return }
+        hoverShowWork?.cancel()
+        hoverModule = module
+        let work = DispatchWorkItem { [weak self, weak module] in
+            guard let self, let module else { return }
+            self.hoverShowWork = nil
+            self.showHover(for: module)
+        }
+        hoverShowWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverShowDelay, execute: work)
+    }
+
+    private func pointerLeft() {
+        hoverShowWork?.cancel()
+        hoverShowWork = nil
+        guard hoverPopover != nil else {
+            hoverModule = nil
+            return
+        }
+        hoverHideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.hoverContent.isMouseInside else { return }
+            self.closeHover()
+        }
+        hoverHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverHideDelay, execute: work)
+    }
+
+    private func showHover(for module: MenuBarModule) {
+        guard !isMenuOpen, alertPopover == nil, let button = statusItem?.button,
+              let anchor = rect(for: module, in: button) else { return }
+        closeHover()
+        hoverModule = module
+        module.menuWillOpen()
+        module.updateMenuSection(timeline)
+        hoverContent.embed(module.menuSection)
+
+        let popover = NSPopover()
+        popover.contentViewController = hoverContent
+        popover.behavior = .applicationDefined
+        popover.animates = false
+        hoverPopover = popover
+        popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
+
+        guard module.wantsProcessSnapshot else { return }
+        module.show(nil)
+        let sampler = ProcessSampler()
+        hoverSampler = sampler
+        sampler.sample { [weak self, weak sampler, weak module] snapshot in
+            guard let self, let sampler, self.hoverSampler === sampler, let snapshot, let module else { return }
+            self.hoverSampler = nil
+            module.show(snapshot)
+        }
+    }
+
+    /// Closes the bubble and gives its section back to the dropdown.
+    private func closeHover() {
+        hoverShowWork?.cancel()
+        hoverShowWork = nil
+        hoverHideWork?.cancel()
+        hoverHideWork = nil
+        hoverSampler?.cancel()
+        hoverSampler = nil
+        guard let popover = hoverPopover else {
+            hoverModule = nil
+            return
+        }
+        popover.close()
+        hoverPopover = nil
+        hoverContent.release()
+        hoverModule?.menuDidClose()
+        hoverModule = nil
+        menuContainer.show(sections: shownModules.map(\.menuSection))
     }
 
     private func confirmForceQuit(_ hog: CPUHog) {
