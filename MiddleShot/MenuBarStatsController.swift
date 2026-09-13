@@ -24,8 +24,15 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
     }
 
     private let disk = DiskModule()
+    private let cpu = CPUModule()
     /// Every module, in its default order. A new module goes here.
-    private(set) lazy var modules: [MenuBarModule] = [NetworkModule(), MemoryModule(), CPUModule(), disk]
+    private(set) lazy var modules: [MenuBarModule] = [NetworkModule(), MemoryModule(), cpu, disk]
+
+    private let cpuAlert = CPUAlertMonitor()
+    private var alertPopover: NSPopover?
+    private let alertContent = CPUAlertViewController()
+    /// Where the CPU graph sits inside the status button, for anchoring the bubble.
+    private var cpuPartSpan: (x: CGFloat, width: CGFloat, imageWidth: CGFloat)?
 
     private static let timelineCapacity = 60
 
@@ -81,6 +88,21 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
         settingsChanged()
     }
 
+    func setCPUAlert(enabled: Bool) {
+        Settings.cpuAlertEnabled = enabled
+        settingsChanged()
+    }
+
+    func setCPUAlertThreshold(_ percent: Double) {
+        Settings.cpuAlertThreshold = percent
+        settingsChanged()
+    }
+
+    func clearCPUAlertIgnored() {
+        Settings.cpuAlertIgnored = []
+        settingsChanged()
+    }
+
     func setUpdateInterval(_ seconds: TimeInterval) {
         Settings.menuBarUpdateInterval = seconds
         // Samples taken at another pace would squash or stretch the graphs.
@@ -100,6 +122,7 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
         let shown = shownModules
         guard !shown.isEmpty else {
             stopTimer()
+            cpuAlert.stop()
             if let statusItem {
                 appearanceObservation = nil
                 NSStatusBar.system.removeStatusItem(statusItem)
@@ -128,6 +151,12 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
         renderedKey = nil
         menuContainer.show(sections: shown.map(\.menuSection))
         restartTimer()
+        if Settings.cpuAlertEnabled {
+            wireCPUAlert()
+            cpuAlert.start()
+        } else {
+            cpuAlert.stop()
+        }
     }
 
     private func settingsChanged() {
@@ -171,6 +200,13 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
         let color = Settings.menuBarColorGraphs
         let style = Settings.menuBarStatsStyle
         let parts = shown.map { $0.part(style: style, color: color) }
+        var x: CGFloat = 0
+        cpuPartSpan = nil
+        let imageWidth = ceil(parts.reduce(0) { $0 + $1.width } + MenuBarDrawing.partGap * CGFloat(max(parts.count - 1, 0)))
+        for (module, part) in zip(shown, parts) {
+            if module === cpu { cpuPartSpan = (x, part.width, imageWidth) }
+            x += part.width + MenuBarDrawing.partGap
+        }
         let appearance = button.effectiveAppearance
         let scale = button.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         let key = "\(style.rawValue)|\(color)|\(appearance.name.rawValue)|\(scale)|" + parts.map(\.key).joined(separator: "|")
@@ -235,6 +271,85 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
 
     @objc private func openDashboard() {
         onOpenDashboard?()
+    }
+
+    // MARK: - CPU alert
+
+    private func wireCPUAlert() {
+        guard cpuAlert.onChange == nil else { return }
+        cpuAlert.onChange = { [weak self] hog in self?.showCPUAlert(hog) }
+        alertContent.onClose = { [weak self] in self?.cpuAlert.dismissCurrent() }
+        alertContent.onIgnore = { [weak self] in
+            guard let self, let hog = self.cpuAlert.current else { return }
+            Settings.cpuAlertIgnored = Array(Set(Settings.cpuAlertIgnored + [hog.ignoreKey])).sorted()
+            os_log("CPU alert: ignoring %{public}@", log: log, type: .info, hog.ignoreKey)
+            self.cpuAlert.forget(hog)
+            self.settingsWindow?.reload()
+        }
+        alertContent.onForceQuit = { [weak self] in
+            guard let self, let hog = self.cpuAlert.current else { return }
+            self.confirmForceQuit(hog)
+        }
+    }
+
+    private func showCPUAlert(_ hog: CPUHog?) {
+        let alerting = hog != nil
+        if cpu.isAlerting != alerting {
+            cpu.isAlerting = alerting
+            render(shownModules)
+        }
+        guard let hog, let button = statusItem?.button else {
+            alertPopover?.performClose(nil)
+            alertPopover = nil
+            return
+        }
+        alertContent.show(hog)
+        guard alertPopover == nil else { return }
+        let popover = NSPopover()
+        popover.contentViewController = alertContent
+        // Stays until closed: a bubble that vanished on the next click in
+        // another app would be gone before anyone read it.
+        popover.behavior = .applicationDefined
+        popover.animates = true
+        alertPopover = popover
+        popover.show(relativeTo: anchorRect(in: button), of: button, preferredEdge: .minY)
+    }
+
+    /// The CPU graph's slice of the button; the whole button if CPU is hidden.
+    private func anchorRect(in button: NSStatusBarButton) -> NSRect {
+        guard let span = cpuPartSpan else { return button.bounds }
+        let imageLeft = (button.bounds.width - span.imageWidth) / 2
+        return NSRect(x: imageLeft + span.x, y: button.bounds.minY, width: span.width, height: button.bounds.height)
+    }
+
+    private func confirmForceQuit(_ hog: CPUHog) {
+        alertPopover?.performClose(nil)
+        alertPopover = nil
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.icon = hog.iconPath.map { NSWorkspace.shared.icon(forFile: $0) }
+        alert.messageText = "Force quit “\(hog.name)”?"
+        alert.informativeText = String(format: "%.0f%% CPU\n\n", hog.cpu) + (hog.isApp
+            ? "\(hog.name) closes immediately, with all of its processes. Unsaved changes will be lost."
+            : "This process stops immediately.")
+        // Escape cancels; Return does nothing (a destructive button means no default).
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Force Quit").hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else {
+            // Still busy? Bring the bubble back on the next check.
+            cpuAlert.forget(hog)
+            return
+        }
+        let row = ProcessRow(pid: hog.pid, name: hog.name, kind: hog.isApp ? .app : .process, cpu: hog.cpu, memory: 0,
+                             processCount: 1, owner: nil, iconPath: hog.iconPath, startTime: hog.startTime)
+        switch ProcessSampler.forceQuit(row) {
+        case .success:
+            os_log("CPU alert: force quit %{public}@", log: log, type: .info, hog.name)
+        case .failure(let error):
+            NSAlert(error: error).runModal()
+        }
+        cpuAlert.forget(hog)
     }
 
     /// Modules' action items sit between the sections and "Open Dashboard…";

@@ -17,6 +17,9 @@ enum Settings {
     private static let menuBarStatsStyleKey = "menuBarStatsStyle"
     private static let menuBarColorGraphsKey = "menuBarColorGraphs"
     private static let menuBarUpdateIntervalKey = "menuBarUpdateInterval"
+    private static let cpuAlertEnabledKey = "cpuAlertEnabled"
+    private static let cpuAlertThresholdKey = "cpuAlertThreshold"
+    private static let cpuAlertIgnoredKey = "cpuAlertIgnored"
 
     /// Whether an area screenshot presents the floating thumbnail (`-u`) or
     /// saves straight to the screenshot folder with no UI.
@@ -131,6 +134,31 @@ enum Settings {
             return [1, 2, 5].contains(stored) ? stored : 1
         }
         set { UserDefaults.standard.set(newValue, forKey: menuBarUpdateIntervalKey) }
+    }
+
+    /// Warn under the CPU graph when an app stays busy (see CPUAlertMonitor).
+    static var cpuAlertEnabled: Bool {
+        get { bool(cpuAlertEnabledKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: cpuAlertEnabledKey) }
+    }
+
+    static let cpuAlertThresholds: [Double] = [80, 100, 150, 200]
+
+    /// Percent of one core an app must stay above for a minute. 100 — a full
+    /// core — by default: on a many-core Mac 80 % is everyday browsing.
+    static var cpuAlertThreshold: Double {
+        get {
+            let stored = UserDefaults.standard.double(forKey: cpuAlertThresholdKey)
+            return cpuAlertThresholds.contains(stored) ? stored : 100
+        }
+        set { UserDefaults.standard.set(newValue, forKey: cpuAlertThresholdKey) }
+    }
+
+    /// Bundle ids (or executable names) never to warn about — Xcode building
+    /// for ten minutes is not news.
+    static var cpuAlertIgnored: [String] {
+        get { UserDefaults.standard.stringArray(forKey: cpuAlertIgnoredKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: cpuAlertIgnoredKey) }
     }
 
     /// An unset key reads as `fallback` rather than false.

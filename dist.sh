@@ -71,6 +71,14 @@ this same version, build number and commit.
    • Screen Recording    — for the area screenshot
    (System Settings → Privacy & Security → each section, toggle MiddleShot on)
 4. Click the cursor icon in the menu bar → "Launch at Login" to auto-start.
+5. Optional: Full Disk Access (System Settings → Privacy & Security) lets the
+   Dashboard's Entire Disk scan see every folder; it works without it.
+
+Also in the menu:
+   • Open Dashboard…   — Disk (largest items, Safe to Clean) and CPU & Memory
+   • Menu Bar Stats     — live CPU / memory / network / disk next to the icon;
+                          Reorder & Customize… to order, hide, or set the
+                          busy-CPU warning
 
 Gestures:
    • Magic Mouse, 3-finger CLICK       → middle click

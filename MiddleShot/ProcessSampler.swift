@@ -95,7 +95,7 @@ struct ProcessSnapshot {
 final class ProcessSampler {
     static let sampleInterval: TimeInterval = 1
 
-    private struct RawProcess {
+    struct ProcessReading {
         let pid: pid_t
         let parent: pid_t
         let path: String
@@ -105,7 +105,7 @@ final class ProcessSampler {
         let startTime: UInt64
     }
 
-    private static let systemPathPrefixes = ["/System/", "/usr/", "/bin/", "/sbin/", "/Library/Apple/"]
+    static let systemPathPrefixes = ["/System/", "/usr/", "/bin/", "/sbin/", "/Library/Apple/"]
 
     private let wakeUp = DispatchSemaphore(value: 0)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
@@ -152,7 +152,7 @@ final class ProcessSampler {
 
     // MARK: - Grouping (main thread — needs NSWorkspace)
 
-    private static func snapshot(before: [pid_t: RawProcess], after: [pid_t: RawProcess],
+    private static func snapshot(before: [pid_t: ProcessReading], after: [pid_t: ProcessReading],
                                  unmeasured: Int, elapsed: Double, load: SystemLoad) -> ProcessSnapshot {
         let myPID = getpid()
         let runningApps = NSWorkspace.shared.runningApplications
@@ -167,7 +167,7 @@ final class ProcessSampler {
             }
             .sorted { $0.prefix.count > $1.prefix.count }
 
-        func owningApp(of process: RawProcess) -> pid_t? {
+        func owningApp(of process: ProcessReading) -> pid_t? {
             if appsByPID[process.pid] != nil { return process.pid }
             if let match = bundlePrefixes.first(where: { process.path.hasPrefix($0.prefix) }) {
                 return match.pid
@@ -264,7 +264,7 @@ final class ProcessSampler {
     /// work runs in, and terminal programs whose working folder lies inside that
     /// folder join it. What's left (main process, renderers, GPU) is "shared".
     /// Apps without that shape simply list their busiest processes.
-    private static func breakdown(of app: ProcessRow, members: [ProcessRow], after: [pid_t: RawProcess],
+    private static func breakdown(of app: ProcessRow, members: [ProcessRow], after: [pid_t: ProcessReading],
                                   childrenOf: [pid_t: [pid_t]]) -> [ProcessRow] {
         let rowsByPID = Dictionary(members.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         let owner = (pid: app.pid, name: app.name)
@@ -363,7 +363,7 @@ final class ProcessSampler {
 
     /// The Claude Code CLI: the native binary is named `claude`; an npm install
     /// runs from a `claude-code` package folder.
-    private static func isClaudeCodeSession(_ process: RawProcess) -> Bool {
+    private static func isClaudeCodeSession(_ process: ProcessReading) -> Bool {
         process.name == "claude" || process.path.contains("/claude-code/")
     }
 
@@ -387,7 +387,7 @@ final class ProcessSampler {
 
     // MARK: - Kernel readings (any thread)
 
-    private static func readProcesses() -> (processes: [pid_t: RawProcess], unmeasured: Int) {
+    static func readProcesses() -> (processes: [pid_t: ProcessReading], unmeasured: Int) {
         let estimate = proc_listallpids(nil, 0)
         guard estimate > 0 else { return ([:], 0) }
         var pids = [pid_t](repeating: 0, count: Int(estimate) + 64)
@@ -398,7 +398,7 @@ final class ProcessSampler {
         var timebase = mach_timebase_info_data_t()
         mach_timebase_info(&timebase)
         let myUID = getuid()
-        var processes: [pid_t: RawProcess] = [:]
+        var processes: [pid_t: ProcessReading] = [:]
         var unmeasured = 0
         var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
         var nameBuffer = [CChar](repeating: 0, count: 256)
@@ -437,7 +437,7 @@ final class ProcessSampler {
             // rusage times are Mach absolute-time units, not nanoseconds, on
             // Apple silicon (timebase 125/3).
             let ticks = usage.ri_user_time + usage.ri_system_time
-            processes[pid] = RawProcess(
+            processes[pid] = ProcessReading(
                 pid: pid, parent: pid_t(info.pbsi_ppid), path: path, name: name,
                 cpuNanoseconds: ticks * UInt64(timebase.numer) / UInt64(timebase.denom),
                 footprint: usage.ri_phys_footprint,

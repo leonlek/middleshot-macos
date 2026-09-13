@@ -10,6 +10,9 @@ final class CPUModule: MenuBarModule {
 
     private var lastTicks: SystemStats.CPUTicks?
     private var history = SampleHistory()
+    /// An app has kept the CPU busy: bars turn orange and a dot appears (the
+    /// dot is what shows in a monochrome menu bar).
+    var isAlerting = false
 
     private let value = MenuSection.bigLabel()
     private let detail = MenuSection.detailLabel()
@@ -45,10 +48,19 @@ final class CPUModule: MenuBarModule {
         case .graphsAndNumbers, .graphs:
             let labeled = style == .graphsAndNumbers
             let labelWidth = labeled ? MenuBarDrawing.verticalLabelWidth : 0
-            let key = "cpu\(labeled)" + values.suffix(MenuBarDrawing.historyBarCount).map { String(MenuBarDrawing.pixelKey($0)) }.joined(separator: ",")
-            return MenuBarPart(width: labelWidth + MenuBarDrawing.historyBarsWidth, key: key) { x in
+            let alerting = isAlerting
+            let key = "cpu\(labeled)\(alerting)" + values.suffix(MenuBarDrawing.historyBarCount).map { String(MenuBarDrawing.pixelKey($0)) }.joined(separator: ",")
+            // Room for the alert dot is always kept, so the width never changes.
+            return MenuBarPart(width: labelWidth + MenuBarDrawing.historyBarsWidth + 5, key: key) { x in
                 if labeled { MenuBarDrawing.drawVerticalLabel("CPU", x: x, color: color) }
-                MenuBarDrawing.drawHistoryBars(values, x: x + labelWidth, tint: DashboardStyle.seriesBlue, color: color)
+                let barsX = x + labelWidth
+                MenuBarDrawing.drawHistoryBars(values, x: barsX, tint: alerting ? .systemOrange : DashboardStyle.seriesBlue,
+                                               color: color)
+                if alerting {
+                    MenuBarDrawing.fill(.systemOrange, color: color).setFill()
+                    let dotX = barsX + MenuBarDrawing.historyBarsWidth + 1.5
+                    NSBezierPath(ovalIn: NSRect(x: dotX, y: MenuBarDrawing.bandTop - 3.5, width: 3.5, height: 3.5)).fill()
+                }
             }
         }
     }

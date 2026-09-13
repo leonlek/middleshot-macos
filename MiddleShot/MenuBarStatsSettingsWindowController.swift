@@ -11,10 +11,14 @@ final class MenuBarStatsSettingsWindowController: NSWindowController, NSTableVie
     private let colorCheckbox = NSButton(checkboxWithTitle: "Color graphs", target: nil, action: nil)
     private let intervalPopup = NSPopUpButton()
     private let intervals: [TimeInterval] = [1, 2, 5]
+    private let alertCheckbox = NSButton(checkboxWithTitle: "Warn when an app keeps the CPU busy", target: nil, action: nil)
+    private let thresholdPopup = NSPopUpButton()
+    private let ignoredLabel = NSTextField(wrappingLabelWithString: "")
+    private let clearIgnoredButton = NSButton(title: "Clear", target: nil, action: nil)
 
     init(stats: MenuBarStatsController) {
         self.stats = stats
-        let window = ShortcutWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 420),
+        let window = ShortcutWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 540),
                                     styleMask: [.titled, .closable], backing: .buffered, defer: true)
         window.title = "Menu Bar Stats"
         window.isReleasedWhenClosed = false
@@ -41,6 +45,17 @@ final class MenuBarStatsSettingsWindowController: NSWindowController, NSTableVie
         stylePopup.selectItem(at: MenuBarStatsStyle.allCases.firstIndex(of: Settings.menuBarStatsStyle) ?? 0)
         colorCheckbox.state = Settings.menuBarColorGraphs ? .on : .off
         intervalPopup.selectItem(at: intervals.firstIndex(of: Settings.menuBarUpdateInterval) ?? 0)
+        alertCheckbox.state = Settings.cpuAlertEnabled ? .on : .off
+        thresholdPopup.selectItem(at: Settings.cpuAlertThresholds.firstIndex(of: Settings.cpuAlertThreshold) ?? 1)
+        thresholdPopup.isEnabled = Settings.cpuAlertEnabled
+        let ignored = Settings.cpuAlertIgnored
+        ignoredLabel.stringValue = ignored.isEmpty
+            ? "No ignored apps."
+            : "Ignored: " + ignored.map { id in
+                NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+                    .map { FileManager.default.displayName(atPath: $0.path) } ?? id
+            }.joined(separator: ", ")
+        clearIgnoredButton.isEnabled = !ignored.isEmpty
     }
 
     // MARK: - Layout
@@ -78,10 +93,27 @@ final class MenuBarStatsSettingsWindowController: NSWindowController, NSTableVie
         intervalPopup.target = self
         intervalPopup.action = #selector(intervalChanged)
 
+        alertCheckbox.target = self
+        alertCheckbox.action = #selector(alertChanged)
+        thresholdPopup.addItems(withTitles: Settings.cpuAlertThresholds.map { String(format: "Over %.0f%% of a core for a minute", $0) })
+        thresholdPopup.target = self
+        thresholdPopup.action = #selector(thresholdChanged)
+        ignoredLabel.font = .systemFont(ofSize: 11.5)
+        ignoredLabel.textColor = .secondaryLabelColor
+        ignoredLabel.preferredMaxLayoutWidth = 220
+        clearIgnoredButton.controlSize = .small
+        clearIgnoredButton.target = self
+        clearIgnoredButton.action = #selector(clearIgnored)
+        let ignoredRow = NSStackView(views: [ignoredLabel, clearIgnoredButton])
+        ignoredRow.alignment = .firstBaseline
+
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Style:"), stylePopup],
             [NSGridCell.emptyContentView, colorCheckbox],
             [NSTextField(labelWithString: "Update every:"), intervalPopup],
+            [NSTextField(labelWithString: "CPU alert:"), alertCheckbox],
+            [NSGridCell.emptyContentView, thresholdPopup],
+            [NSGridCell.emptyContentView, ignoredRow],
         ])
         grid.column(at: 0).xPlacement = .trailing
         grid.rowAlignment = .firstBaseline
@@ -176,6 +208,19 @@ final class MenuBarStatsSettingsWindowController: NSWindowController, NSTableVie
 
     @objc private func colorChanged() {
         stats.setColorGraphs(colorCheckbox.state == .on)
+    }
+
+    @objc private func alertChanged() {
+        stats.setCPUAlert(enabled: alertCheckbox.state == .on)
+    }
+
+    @objc private func thresholdChanged() {
+        guard let percent = Settings.cpuAlertThresholds[safe: thresholdPopup.indexOfSelectedItem] else { return }
+        stats.setCPUAlertThreshold(percent)
+    }
+
+    @objc private func clearIgnored() {
+        stats.clearCPUAlertIgnored()
     }
 
     @objc private func intervalChanged() {
