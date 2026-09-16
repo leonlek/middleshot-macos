@@ -60,20 +60,25 @@ enum MenuBarDrawing {
         if let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale),
                                          pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4,
                                          hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                                         bytesPerRow: 0, bitsPerPixel: 0),
-           let context = NSGraphicsContext(bitmapImageRep: bitmap) {
+                                         bytesPerRow: 0, bitsPerPixel: 0) {
+            // The point size has to be on the rep *before* the context is made:
+            // the context takes its unit from the rep's size as it stands then,
+            // so setting it afterwards leaves 1 unit = 1 pixel and the whole
+            // image is drawn at half size in the bottom-left of a 2x bitmap.
             bitmap.size = size
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = context
-            appearance.performAsCurrentDrawingAppearance {
-                var x: CGFloat = 0
-                for part in parts {
-                    part.draw(x)
-                    x += part.width + partGap
+            if let context = NSGraphicsContext(bitmapImageRep: bitmap) {
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = context
+                appearance.performAsCurrentDrawingAppearance {
+                    var x: CGFloat = 0
+                    for part in parts {
+                        part.draw(x)
+                        x += part.width + partGap
+                    }
                 }
+                NSGraphicsContext.restoreGraphicsState()
+                image.addRepresentation(bitmap)
             }
-            NSGraphicsContext.restoreGraphicsState()
-            image.addRepresentation(bitmap)
         }
         // Monochrome is a template image, so macOS tints it exactly like its own
         // icons (including the highlighted state while the menu is open).
