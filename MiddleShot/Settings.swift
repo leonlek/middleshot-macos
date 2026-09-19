@@ -12,6 +12,7 @@ enum Settings {
     private static let diskScanScopeKey = "diskScanScope"
     private static let showsAllProcessesKey = "showsAllProcesses"
     private static let diskShowsCleanupKey = "diskShowsCleanup"
+    private static let diskScanInclusionsKey = "diskScanInclusions"
     private static let menuBarModuleOrderKey = "menuBarModuleOrder"
     private static let menuBarModulesEnabledKey = "menuBarModulesEnabled"
     private static let menuBarStatsStyleKey = "menuBarStatsStyle"
@@ -79,6 +80,13 @@ enum Settings {
     static var diskShowsCleanup: Bool {
         get { UserDefaults.standard.bool(forKey: diskShowsCleanupKey) }
         set { UserDefaults.standard.set(newValue, forKey: diskShowsCleanupKey) }
+    }
+
+    /// What a disk scan also walks. Defaults to nothing — Photos and iCloud
+    /// Drive aren't cleaned from here, and Photos alone slows a scan down.
+    static var diskScanInclusions: DiskScanInclusions {
+        get { DiskScanInclusions(rawValue: UserDefaults.standard.integer(forKey: diskScanInclusionsKey)) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: diskScanInclusionsKey) }
     }
 
     // MARK: - Menu bar stats

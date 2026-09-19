@@ -34,6 +34,10 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
     private let modeControl = NSSegmentedControl(labels: ["Largest Items", "Safe to Clean"], trackingMode: .selectOne,
                                                  target: nil, action: nil)
     private let scopePopup = NSPopUpButton()
+    private let inclusionBoxes: [(DiskScanInclusions, NSButton)] = [
+        (.photosLibrary, NSButton(checkboxWithTitle: "Photos", target: nil, action: nil)),
+        (.iCloudDrive, NSButton(checkboxWithTitle: "iCloud Drive", target: nil, action: nil)),
+    ]
     private let asideLabel = DashboardStyle.label("", size: 11.5, color: .tertiaryLabelColor)
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
@@ -70,9 +74,19 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
         scopePopup.target = self
         scopePopup.action = #selector(scopeChanged)
         let scopeLabel = DashboardStyle.label("Scan", size: 12, color: .secondaryLabelColor)
-        let tools = NSStackView(views: [modeControl, scopeLabel, scopePopup, NSView(), asideLabel])
+        let included = Settings.diskScanInclusions
+        for (place, box) in inclusionBoxes {
+            box.controlSize = .small
+            box.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            box.state = included.contains(place) ? .on : .off
+            box.target = self
+            box.action = #selector(inclusionsChanged)
+        }
+        let tools = NSStackView(views: [modeControl, scopeLabel, scopePopup]
+                                    + inclusionBoxes.map(\.1) + [NSView(), asideLabel])
         tools.spacing = 8
         tools.setCustomSpacing(18, after: modeControl)
+        tools.setCustomSpacing(14, after: scopePopup)
 
         configureTable()
         cleanupList.onClean = { [weak self] items, group in self?.confirmClean(items, in: group) }
@@ -172,7 +186,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
         let scanner = DiskScanner()
         let scope = self.scope
         self.scanner = scanner
-        scanner.scan(scope, progress: { [weak self, weak scanner] update in
+        scanner.scan(scope, including: Settings.diskScanInclusions, progress: { [weak self, weak scanner] update in
             guard let self, let scanner, self.scanner === scanner else { return }
             self.show(update)
         }, completion: { [weak self, weak scanner] result in
@@ -209,6 +223,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
     private func render() {
         scopePopup.selectItem(at: DiskScanScope.allCases.firstIndex(of: scope) ?? 0)
         scopePopup.isEnabled = !isWorking
+        for (_, box) in inclusionBoxes { box.isEnabled = !isWorking }
 
         if let result = results[scope] {
             placeholder.isHidden = true
@@ -251,8 +266,10 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
                               right: results[scope] == nil ? nil : "Stop keeps the previous results")
         } else if let result = results[scope] {
             let seconds = String(format: "%.0f s", result.duration)
+            let leftOut = result.leftOut.names
+            let notIncluded = leftOut.isEmpty ? "" : " · \(leftOut.joined(separator: " and ")) not included"
             statusLine.update(
-                left: "Scanned \(scope.title) · \(DashboardStyle.count(result.itemCount)) items in \(seconds)",
+                left: "Scanned \(scope.title) · \(DashboardStyle.count(result.itemCount)) items in \(seconds)\(notIncluded)",
                 right: result.skippedCount > 0 ? "\(DashboardStyle.count(result.skippedCount)) folders skipped — no access" : nil,
                 rightIsWarning: true,
                 link: result.skippedCount > 0 ? "Grant Full Disk Access…" : nil
@@ -358,6 +375,12 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
         showsCleanup = modeControl.selectedSegment == 1
         Settings.diskShowsCleanup = showsCleanup
         render()
+    }
+
+    /// Takes effect on the next Refresh, like everything else on this tab.
+    @objc private func inclusionsChanged() {
+        Settings.diskScanInclusions = DiskScanInclusions(
+            inclusionBoxes.filter { $0.1.state == .on }.map(\.0))
     }
 
     @objc private func scopeChanged() {

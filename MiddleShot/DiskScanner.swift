@@ -24,6 +24,32 @@ enum DiskScanScope: String, CaseIterable {
     }
 }
 
+/// Places a scan leaves out unless asked. Neither is something to clean up
+/// from here: a photo library is managed by Photos, iCloud Drive by Finder's
+/// Remove Download. Photos alone can be hundreds of thousands of files.
+struct DiskScanInclusions: OptionSet {
+    let rawValue: Int
+    static let photosLibrary = DiskScanInclusions(rawValue: 1 << 0)
+    static let iCloudDrive = DiskScanInclusions(rawValue: 1 << 1)
+
+    /// Whether `url` belongs to a place this set leaves out, and which one.
+    func excluded(_ url: URL) -> DiskScanInclusions? {
+        if !contains(.photosLibrary), url.pathExtension == "photoslibrary" { return .photosLibrary }
+        if !contains(.iCloudDrive) {
+            let components = url.pathComponents.suffix(2)
+            if components.first == "Library", ["Mobile Documents", "CloudStorage"].contains(components.last) {
+                return .iCloudDrive
+            }
+        }
+        return nil
+    }
+
+    var names: [String] {
+        [(DiskScanInclusions.photosLibrary, "Photos Library"), (.iCloudDrive, "iCloud Drive")]
+            .filter { contains($0.0) }.map(\.1)
+    }
+}
+
 /// How safe an item is to move to the Trash. Decided from well-known paths,
 /// not from the contents — it is a hint for the person reading the list, and
 /// the confirmation note spells out what removing it actually costs.
@@ -55,6 +81,8 @@ struct DiskScanResult {
     /// Folders the enumerator could not read — almost always privacy-protected
     /// locations that need Full Disk Access.
     let skippedCount: Int
+    /// Places left out because they weren't included — only ones actually met.
+    let leftOut: DiskScanInclusions
     let duration: TimeInterval
     let finishedAt: Date
     /// The same scan seen as Safe to Clean groups.
@@ -141,6 +169,7 @@ final class DiskScanner {
     private struct Tally {
         var items = 0
         var skipped = 0
+        var leftOut: DiskScanInclusions = []
         var lastReport: UInt64 = 0
     }
 
@@ -154,19 +183,42 @@ final class DiskScanner {
         cancelled.withLock { $0 = true }
     }
 
+    /// Runs `body` with iCloud's dataless items left alone on this thread.
+    ///
+    /// Listing a folder iCloud has evicted (an `.epub` in Books, a package in
+    /// iCloud Drive) makes the kernel wait while the whole thing downloads —
+    /// the scan sat in `getattrlistbulk` indefinitely, and one that did get
+    /// through would have filled the disk it was measuring. With this policy
+    /// off, those calls fail at once with EDEADLK and the folder counts as
+    /// skipped; it takes no local space anyway. Thread scope, restored after,
+    /// because GCD hands these threads to other work once we're done.
+    private static func withoutMaterializing<T>(_ body: () -> T) -> T {
+        let previous = getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD)
+        setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD,
+                       IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+        defer {
+            if previous >= 0 {
+                setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, previous)
+            }
+        }
+        return body()
+    }
+
     /// Scans on a background queue. Both callbacks arrive on main.
-    func scan(_ scope: DiskScanScope,
+    func scan(_ scope: DiskScanScope, including inclusions: DiskScanInclusions,
               progress: @escaping (Progress) -> Void,
               completion: @escaping (DiskScanResult?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = self.run(scope, progress: progress)
+            let result = Self.withoutMaterializing {
+                self.run(scope, including: inclusions, progress: progress)
+            }
             DispatchQueue.main.async {
                 completion(self.isCancelled ? nil : result)
             }
         }
     }
 
-    private func run(_ scope: DiskScanScope,
+    private func run(_ scope: DiskScanScope, including inclusions: DiskScanInclusions,
                      progress: @escaping (Progress) -> Void) -> DiskScanResult? {
         let started = Date()
         let root = scope.rootURL
@@ -178,6 +230,10 @@ final class DiskScanner {
                                           FileManager.default.homeDirectoryForCurrentUser]
             .compactMap { try? $0.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject }
         func shouldSkip(_ url: URL, _ values: URLResourceValues?) -> Bool {
+            if let place = inclusions.excluded(url) {
+                tally.withLock { $0.leftOut.formUnion(place) }
+                return true
+            }
             if scope == .entireDisk {
                 // FileManager reports `/.nofollow` as "/.nofollow/", slash and all.
                 var path = url.path
@@ -225,8 +281,10 @@ final class DiskScanner {
         subtrees.withUnsafeMutableBufferPointer { buffer in
             guard let slots = buffer.baseAddress else { return }
             DispatchQueue.concurrentPerform(iterations: units.count) { index in
-                slots[index] = walk(units[index].url, as: parents[index],
-                                    shouldSkip: shouldSkip, progress: progress)
+                slots[index] = Self.withoutMaterializing {
+                    walk(units[index].url, as: parents[index],
+                         shouldSkip: shouldSkip, progress: progress)
+                }
             }
         }
         if isCancelled { return nil }
@@ -305,7 +363,7 @@ final class DiskScanner {
         os_log("Scanned %{public}@: %d items in %d folders walked in parallel, %d skipped, %.1fs",
                log: log, type: .info, root.path, counts.items, units.count, counts.skipped, duration)
         return DiskScanResult(scope: scope, items: items, itemCount: counts.items,
-                              skippedCount: counts.skipped, duration: duration, finishedAt: Date(),
+                              skippedCount: counts.skipped, leftOut: counts.leftOut, duration: duration, finishedAt: Date(),
                               cleanup: cleanup)
     }
 
