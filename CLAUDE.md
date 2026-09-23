@@ -56,6 +56,8 @@ Silent mode is the default because waiting out the thumbnail is pure latency whe
 
 The clipboard copy is ours, not screencapture's: on a clean exit `ActionHandler` reads the file it named and puts one `NSPasteboardItem` carrying both the image data and its `fileURL`, so editors paste the picture and Finder pastes the file (macOS derives TIFF/JPEG/etc. from the PNG automatically). This is only possible in silent mode — thumbnail mode never learns the path.
 
+**Save folder** ("Save Screenshots To" submenu: Same as ⌘⇧4 (default) / Desktop / Documents / Downloads / the chosen custom folder, Other Location…, Show in Finder) is MiddleShot's own `Settings.screenshotFolder` — **it must never write `com.apple.screencapture location`** (user decision, 2026-09-23: changing it here must not move ⌘⇧4's captures). The consequence, accepted: it applies to **silent mode only**. Thumbnail mode's `-p` reads nothing but the system location, and passing a path instead is what loses the thumbnail, so there it follows ⌘⇧4 — the submenu says so while the thumbnail is on. A chosen folder that has since disappeared falls back to the system location.
+
 **Rejected alternatives (don't relitigate without strong reason):**
 
 - `-i -c` (clipboard-only) as the way to get a clipboard copy: no thumbnail appears *and no file is saved*, so it can serve neither mode. We save a file and copy it ourselves instead.

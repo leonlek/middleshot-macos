@@ -17,7 +17,8 @@ enum ScreenshotFile {
         let defaults = UserDefaults(suiteName: domain)
         let prefix = defaults?.string(forKey: "name") ?? "Screenshot"
         let type = defaults?.string(forKey: "type") ?? "png"
-        let directory = captureDirectory(defaults)
+        let directory = existingFolder(Settings.screenshotFolder)
+            ?? captureDirectory(defaults)
         let stamp = timestamp.string(from: Date())
 
         // Two captures inside the same second would otherwise collide and the
@@ -42,22 +43,43 @@ enum ScreenshotFile {
         return formatter
     }()
 
+    /// Where ⌘⇧4 saves — and so where thumbnail mode (`-p`) and silent mode
+    /// with no folder of MiddleShot's own save too.
+    static var systemDirectory: URL {
+        captureDirectory(UserDefaults(suiteName: domain))
+    }
+
+    /// Where the next silent capture lands.
+    static var directory: URL {
+        existingFolder(Settings.screenshotFolder) ?? systemDirectory
+    }
+
+    static var desktop: URL {
+        FileManager.default
+            .urls(for: .desktopDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Desktop", isDirectory: true)
+    }
+
     /// The `location` preference, or the Desktop. A location that has since been
     /// deleted or renamed falls back rather than handing screencapture a path it
     /// will fail to write — the capture would be lost with no visible error.
     private static func captureDirectory(_ defaults: UserDefaults?) -> URL {
-        if let configured = defaults?.string(forKey: "location") {
-            let expanded = (configured as NSString).expandingTildeInPath
-            var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: expanded,
-                                              isDirectory: &isDirectory),
-               isDirectory.boolValue {
-                return URL(fileURLWithPath: expanded, isDirectory: true)
-            }
+        let configured = defaults?.string(forKey: "location").map {
+            URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath,
+                isDirectory: true)
         }
-        return FileManager.default
-            .urls(for: .desktopDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Desktop", isDirectory: true)
+        return existingFolder(configured) ?? desktop
+    }
+
+    /// `url` if it is still a folder. MiddleShot's own folder falls back the
+    /// same way the system one does, for the same reason.
+    private static func existingFolder(_ url: URL?) -> URL? {
+        guard let url else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path,
+                                             isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return url
     }
 }

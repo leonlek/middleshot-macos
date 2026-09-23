@@ -8,6 +8,7 @@ import Foundation
 enum Settings {
     private static let showsScreenshotThumbnailKey = "showsScreenshotThumbnail"
     private static let copiesScreenshotToClipboardKey = "copiesScreenshotToClipboard"
+    private static let screenshotFolderKey = "screenshotFolder"
     private static let dashboardTabKey = "dashboardTab"
     private static let diskScanScopeKey = "diskScanScope"
     private static let showsAllProcessesKey = "showsAllProcesses"
@@ -50,6 +51,20 @@ enum Settings {
             return defaults.bool(forKey: copiesScreenshotToClipboardKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: copiesScreenshotToClipboardKey) }
+    }
+
+    /// MiddleShot's own save folder for silent captures, or nil to follow the
+    /// system's (⌘⇧4's) `com.apple.screencapture location`. Kept here rather
+    /// than written to that domain so choosing it never moves ⌘⇧4's captures.
+    ///
+    /// Thumbnail mode can't honour it: `-p` reads only the system location,
+    /// and passing a path instead is what loses the thumbnail.
+    static var screenshotFolder: URL? {
+        get {
+            UserDefaults.standard.string(forKey: screenshotFolderKey)
+                .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        }
+        set { UserDefaults.standard.set(newValue?.path, forKey: screenshotFolderKey) }
     }
 
     /// The dashboard tab that was showing when the window last closed:

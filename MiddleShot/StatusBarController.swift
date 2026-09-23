@@ -9,6 +9,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
     private let launchAtLoginItem: NSMenuItem
     private let thumbnailItem: NSMenuItem
     private let copyToClipboardItem: NSMenuItem
+    private let saveLocationMenu = NSMenu()
     private let onReloadDevices: () -> Void
     /// Created on first use and kept for the life of the app, so closing the
     /// window keeps the last scan and snapshot around for next time.
@@ -73,6 +74,11 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
             + "ready to paste. Unavailable while the thumbnail is shown — drag "
             + "the thumbnail instead."
         menu.addItem(copyToClipboardItem)
+        let saveLocationItem = NSMenuItem(title: "Save Screenshots To",
+                                          action: nil, keyEquivalent: "")
+        saveLocationMenu.delegate = self
+        saveLocationItem.submenu = saveLocationMenu
+        menu.addItem(saveLocationItem)
         addItem(to: menu, title: "Reload Devices",
                 action: #selector(reloadDevices))
         menu.addItem(.separator())
@@ -93,6 +99,10 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu == saveLocationMenu {
+            rebuildSaveLocationMenu()
+            return
+        }
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         thumbnailItem.state = Settings.showsScreenshotThumbnail ? .on : .off
         copyToClipboardItem.state = Settings.copiesScreenshotToClipboard ? .on : .off
@@ -169,6 +179,98 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         copyToClipboardItem.state = enabled ? .on : .off
         os_log("Clipboard copy %{public}@",
                log: log, type: .info, enabled ? "enabled" : "disabled")
+    }
+
+    // MARK: - Save location
+
+    /// MiddleShot's own folder, never the system's: ⌘⇧4 keeps saving where it
+    /// did. Rebuilt on every open because the "Same as ⌘⇧4" row names the
+    /// system folder, which ⌘⇧5 → Options can change at any time.
+    private func rebuildSaveLocationMenu() {
+        saveLocationMenu.removeAllItems()
+        let fileManager = FileManager.default
+        let chosen = Settings.screenshotFolder?.standardizedFileURL
+
+        let system = ScreenshotFile.systemDirectory
+        let systemItem = folderItem(
+            title: "Same as ⌘⇧4 (\(fileManager.displayName(atPath: system.path)))",
+            folder: system, represents: nil)
+        systemItem.state = chosen == nil ? .on : .off
+        saveLocationMenu.addItem(systemItem)
+        saveLocationMenu.addItem(.separator())
+
+        var folders = [ScreenshotFile.desktop]
+        for directory: FileManager.SearchPathDirectory in [.documentDirectory, .downloadsDirectory] {
+            if let url = fileManager.urls(for: directory, in: .userDomainMask).first {
+                folders.append(url)
+            }
+        }
+        if let chosen, !folders.contains(where: { $0.standardizedFileURL == chosen }) {
+            folders.append(chosen)
+        }
+        for folder in folders {
+            let item = folderItem(title: fileManager.displayName(atPath: folder.path),
+                                  folder: folder, represents: folder)
+            item.state = folder.standardizedFileURL == chosen ? .on : .off
+            saveLocationMenu.addItem(item)
+        }
+
+        if Settings.showsScreenshotThumbnail {
+            let note = NSMenuItem(title: "With the thumbnail on, captures go where ⌘⇧4 saves",
+                                  action: nil, keyEquivalent: "")
+            note.isEnabled = false
+            saveLocationMenu.addItem(note)
+        }
+        saveLocationMenu.addItem(.separator())
+        addItem(to: saveLocationMenu, title: "Other Location…",
+                action: #selector(chooseOtherSaveLocation))
+        addItem(to: saveLocationMenu, title: "Show in Finder",
+                action: #selector(showSaveLocation))
+    }
+
+    /// `represents` is what choosing the row stores: a folder, or nil for
+    /// "follow the system".
+    private func folderItem(title: String, folder: URL, represents: URL?) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(chooseSaveLocation(_:)),
+                              keyEquivalent: "")
+        item.target = self
+        item.representedObject = represents
+        item.toolTip = (folder.path as NSString).abbreviatingWithTildeInPath
+        let icon = NSWorkspace.shared.icon(forFile: folder.path)
+        icon.size = NSSize(width: 16, height: 16)
+        item.image = icon
+        return item
+    }
+
+    @objc private func chooseSaveLocation(_ sender: NSMenuItem) {
+        setSaveLocation(sender.representedObject as? URL)
+    }
+
+    @objc private func chooseOtherSaveLocation() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose where screenshots are saved."
+        panel.directoryURL = ScreenshotFile.directory
+        // An accessory app's panel opens behind the frontmost window otherwise.
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        setSaveLocation(folder)
+    }
+
+    @objc private func showSaveLocation() {
+        let folder = Settings.showsScreenshotThumbnail
+            ? ScreenshotFile.systemDirectory : ScreenshotFile.directory
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
+    }
+
+    private func setSaveLocation(_ folder: URL?) {
+        Settings.screenshotFolder = folder
+        os_log("Screenshot folder set to %{public}@",
+               log: log, type: .info, folder?.path ?? "system location")
     }
 
     @objc private func toggleLaunchAtLogin() {
