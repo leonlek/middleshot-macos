@@ -152,7 +152,7 @@ final class DiskScanner {
     }
 
     private static let resourceKeys: [URLResourceKey] = [
-        .isDirectoryKey, .isPackageKey, .totalFileAllocatedSizeKey, .volumeIdentifierKey,
+        .isDirectoryKey, .isPackageKey, .totalFileAllocatedSizeKey, .volumeIdentifierKey, .linkCountKey,
     ]
 
     private struct Node {
@@ -175,6 +175,16 @@ final class DiskScanner {
 
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
     private let tally = OSAllocatedUnfairLock(initialState: Tally())
+    /// Inodes of hard-linked files already counted. pnpm hard-links one copy
+    /// of each package file into every place that uses it; counting every path
+    /// read a 11 GB node_modules as 23 GB (2026-09-25). Like `du`, a file with
+    /// several links is counted once — at whichever path the walk meets first.
+    private let countedLinks = OSAllocatedUnfairLock(initialState: Set<HardLink>())
+
+    private struct HardLink: Hashable {
+        let device: Int32
+        let inode: UInt64
+    }
 
     private var isCancelled: Bool { cancelled.withLock { $0 } }
 
@@ -486,9 +496,18 @@ final class DiskScanner {
         return Int32(nodes.count - 1)
     }
 
+    /// True the first time any path to this file is seen during the scan.
+    private func isFirstLink(_ url: URL) -> Bool {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return true }
+        let link = HardLink(device: info.st_dev, inode: info.st_ino)
+        return countedLinks.withLock { $0.insert(link).inserted }
+    }
+
     private func addFile(_ url: URL, _ values: URLResourceValues?, parent: Int32,
                          to nodes: inout [Node]) {
         let size = Int64(values?.totalFileAllocatedSize ?? 0)
+        if let links = values?.linkCount, links > 1, !isFirstLink(url) { return }
         guard size >= Self.fileNodeMinimum else {
             nodes[Int(parent)].size += size
             return

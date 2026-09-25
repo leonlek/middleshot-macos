@@ -144,6 +144,13 @@ final class CleanupListController: NSObject, NSOutlineViewDataSource, NSOutlineV
             if recommended > 0 {
                 titleViews.append(ChipView(text: "\(recommended) recommended", color: .systemGreen))
             }
+            let info = NSButton(image: NSImage(systemSymbolName: "info.circle",
+                                               accessibilityDescription: "About \(group.title)") ?? NSImage(),
+                                target: self, action: #selector(infoPressed(_:)))
+            info.isBordered = false
+            info.contentTintColor = .secondaryLabelColor
+            info.toolTip = "คืออะไร ลบได้ไหม"
+            titleViews.append(info)
             let top = NSStackView(views: titleViews)
             top.spacing = 6
             let explanation = DashboardStyle.label(group.explanation, size: 11.5, color: .secondaryLabelColor)
@@ -243,6 +250,52 @@ final class CleanupListController: NSObject, NSOutlineViewDataSource, NSOutlineV
         let targets = recommended.isEmpty ? (permanent ? [] : node.group.cleanableItems) : recommended
         guard !targets.isEmpty else { return }
         onClean?(targets, node.group)
+    }
+
+    private var infoPopover: NSPopover?
+
+    /// The group's guide in a popover under the ⓘ: what, what deleting costs, when.
+    @objc private func infoPressed(_ sender: NSButton) {
+        guard let node = outlineView.item(atRow: outlineView.row(for: sender)) as? GroupNode else { return }
+        infoPopover?.close()
+        let guide = node.group.guide
+        let width: CGFloat = 340
+
+        func paragraph(_ heading: String, _ text: String) -> NSView {
+            let title = DashboardStyle.label(heading, size: 11, weight: .semibold, color: .secondaryLabelColor)
+            let body = NSTextField(wrappingLabelWithString: text)
+            body.font = .systemFont(ofSize: 12.5)
+            body.preferredMaxLayoutWidth = width
+            let stack = NSStackView(views: [title, body])
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 2
+            return stack
+        }
+        let heading = DashboardStyle.label(node.group.title, size: 14, weight: .semibold)
+        let content = NSStackView(views: [
+            heading,
+            paragraph("คืออะไร", guide.what),
+            paragraph("ถ้าลบจะเป็นอย่างไร", guide.cost),
+            paragraph("ควรลบเมื่อไหร่", guide.when),
+        ])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 10
+        content.setCustomSpacing(8, after: heading)
+        content.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 16, right: 16)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.widthAnchor.constraint(equalToConstant: width + 32).isActive = true
+
+        let controller = NSViewController()
+        controller.view = content
+        content.layoutSubtreeIfNeeded()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = controller
+        popover.contentSize = content.fittingSize
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+        infoPopover = popover
     }
 
     @objc private func cleanItemPressed(_ sender: NSButton) {
