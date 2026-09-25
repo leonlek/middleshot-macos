@@ -275,8 +275,11 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
 
     @objc private func toggleLaunchAtLogin() {
         let service = SMAppService.mainApp
+        let status = service.status
+        os_log("Launch at Login toggle from status %{public}@ (bundle %{public}@)", log: log, type: .info,
+               "\(status.rawValue)", Bundle.main.bundlePath)
         do {
-            if service.status == .enabled {
+            if status == .enabled {
                 try service.unregister()
                 os_log("Launch at Login disabled", log: log, type: .info)
             } else {
@@ -286,10 +289,19 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         } catch {
             os_log("SMAppService toggle failed: %{public}@",
                    log: log, type: .error, "\(error)")
+            // Seen as "Invalid argument" (code 22) when the login item record
+            // macOS keeps no longer matches this copy of the app — a rebuilt or
+            // moved bundle. The switch in Login Items still works then.
             let alert = NSAlert()
             alert.messageText = "Couldn't toggle Launch at Login"
             alert.informativeText = error.localizedDescription
-            alert.runModal()
+                + "\n\nYou can turn MiddleShot on or off under System Settings › General › Login Items."
+            alert.addButton(withTitle: "Open Login Items")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn {
+                SMAppService.openSystemSettingsLoginItems()
+            }
         }
     }
 }

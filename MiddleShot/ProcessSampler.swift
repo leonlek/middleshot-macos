@@ -192,6 +192,7 @@ final class ProcessSampler {
                                       iconPath: app.bundleURL?.path)
         }
 
+        let folders = ProjectFolders(processes: after)
         var processRows: [ProcessRow] = []
         processRows.reserveCapacity(after.count)
         var ownerOf: [pid_t: pid_t] = [:]
@@ -217,13 +218,30 @@ final class ProcessSampler {
                 kind = .app
             } else if ownerPID != nil {
                 kind = .helper
-            } else if systemPathPrefixes.contains(where: { process.path.hasPrefix($0) }) {
+            } else if process.path.isEmpty || systemPathPrefixes.contains(where: { process.path.hasPrefix($0) }) {
+                // No readable path: a daemon macOS runs with more privilege
+                // than ours (diagnosticd). System, so no Force Quit either.
                 kind = .system
             } else {
                 kind = .process
             }
             let owner = ownerPID.flatMap { pid in appRows[pid].map { (pid: pid, name: $0.name) } }
             let isClaudeCode = isClaudeCodeSession(process)
+            let detail: String?
+            switch kind {
+            case _ where isClaudeCode:
+                detail = workFolder(of: process.pid).map { "Claude Code session in \(($0 as NSString).lastPathComponent)" }
+            case .helper:
+                detail = (["Part of \(owner?.name ?? "an app")"] + [folders.project(of: process)].compactMap { $0 })
+                    .joined(separator: " · ")
+            case .process:
+                detail = simulatorOrigin(of: process, processes: after)
+                    ?? origin(of: process, appsByPID: appsByPID, folders: folders)
+            case .system:
+                detail = responsibleApp(for: process.pid, appsByPID: appsByPID).map { "macOS system process · from \($0)" }
+            default:
+                detail = nil
+            }
             processRows.append(ProcessRow(
                 pid: process.pid,
                 name: kind == .app ? (appsByPID[process.pid]?.localizedName ?? process.name)
@@ -232,7 +250,7 @@ final class ProcessSampler {
                 owner: kind == .helper ? owner : nil,
                 iconPath: owner.flatMap { appRows[$0.pid]?.iconPath } ?? (process.path.isEmpty ? nil : process.path),
                 startTime: process.startTime,
-                detail: isClaudeCode ? workFolder(of: process.pid).map { "Claude Code session in \(($0 as NSString).lastPathComponent)" } : nil
+                detail: detail
             ))
             if appRows[process.pid] != nil {
                 appRows[process.pid]?.startTime = process.startTime
@@ -367,6 +385,215 @@ final class ProcessSampler {
         process.name == "claude" || process.path.contains("/claude-code/")
     }
 
+    // MARK: - Where a stray process came from
+
+    /// "Gradle daemon 9.3.1 · from Code · hometory-android" for a process no app
+    /// owns — what it is, which app is responsible for it, and the project it
+    /// works in; whichever of the three can be told. Nil leaves the plain
+    /// "Process" subtitle.
+    ///
+    /// The app comes from macOS's own record of responsibility (what Privacy &
+    /// Security attributes a process to), which survives what the parent chain
+    /// doesn't: a Gradle or Kotlin daemon detaches to launchd (ppid 1) the
+    /// moment it starts, yet is still "responsible to" the editor that ran the
+    /// build. Such a row is still not folded into that app — Force Quit on it
+    /// must end only the daemon, never the editor.
+    private static func origin(of process: ProcessReading, appsByPID: [pid_t: NSRunningApplication],
+                               folders: ProjectFolders) -> String? {
+        var parts: [String] = []
+        if let role = role(of: process) { parts.append(role) }
+        if let app = responsibleApp(for: process.pid, appsByPID: appsByPID) { parts.append("from \(app)") }
+        if let project = folders.project(of: process) { parts.append(project) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "iOS Simulator · iPhone 17 Pro Max · iOS 26.5" for a process running
+    /// inside a simulated device. Its responsible process is CoreSimulator's
+    /// SimulatorTrampoline, not an app, so the device is found instead: the
+    /// nearest `launchd_sim` ancestor is started with that device's folder,
+    /// whose device.plist has the name the Simulator shows.
+    private static func simulatorOrigin(of process: ProcessReading, processes: [pid_t: ProcessReading]) -> String? {
+        guard let runtimeRange = process.path.range(of: #"[^/]+(?=\.simruntime/)"#, options: .regularExpression)
+        else { return nil }
+        var parts = ["iOS Simulator"]
+        var cursor = process.parent
+        for _ in 0..<16 where cursor > 1 {
+            guard let parent = processes[cursor] else { break }
+            if parent.name == "launchd_sim" {
+                if let device = simulatorDeviceName(launchd: parent.pid) { parts.append(device) }
+                break
+            }
+            cursor = parent.parent
+        }
+        parts.append(String(process.path[runtimeRange]))
+        return parts.joined(separator: " · ")
+    }
+
+    /// Device names by UDID — read once, a device doesn't get renamed while booted.
+    private static var simulatorDeviceNames: [String: String] = [:]
+
+    private static func simulatorDeviceName(launchd pid: pid_t) -> String? {
+        guard let path = arguments(of: pid)?.first(where: { $0.contains("/CoreSimulator/Devices/") }),
+              let range = path.range(of: #"(?<=/Devices/)[0-9A-F-]{36}"#, options: .regularExpression) else { return nil }
+        let udid = String(path[range])
+        if let known = simulatorDeviceNames[udid] { return known }
+        let plist = String(path[..<range.upperBound]) + "/device.plist"
+        guard let data = FileManager.default.contents(atPath: plist),
+              let object = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let name = object["name"] as? String else { return nil }
+        simulatorDeviceNames[udid] = name
+        return name
+    }
+
+    private typealias ResponsiblePID = @convention(c) (pid_t) -> pid_t
+
+    /// `responsibility_get_pid_responsible_for_pid`, private in libSystem. Looked
+    /// up at run time so a macOS that drops it only loses the "from" part.
+    private static let responsiblePID: ResponsiblePID? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid")
+        else { return nil }
+        return unsafeBitCast(symbol, to: ResponsiblePID.self)
+    }()
+
+    private static func responsibleApp(for pid: pid_t, appsByPID: [pid_t: NSRunningApplication]) -> String? {
+        guard let responsible = responsiblePID?(pid), responsible > 0, responsible != pid else { return nil }
+        if let app = appsByPID[responsible] { return app.localizedName }
+        // A responsible process that isn't a regular app (Terminal's login
+        // shell, a background agent) — name its bundle if it has one.
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard proc_pidpath(responsible, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        let path = String(cString: buffer)
+        guard let range = path.range(of: ".app/") else { return nil }
+        return (String(path[..<range.lowerBound]) as NSString).lastPathComponent
+    }
+
+    /// What an interpreter is running, from its arguments — "java" alone says
+    /// nothing. Only read for interpreters: arguments cost a sysctl each.
+    private static func role(of process: ProcessReading) -> String? {
+        let interpreters = ["java", "node", "python", "python3", "ruby", "bun", "deno", "dotnet"]
+        guard interpreters.contains(process.name) || process.name.hasPrefix("python3."),
+              let arguments = arguments(of: process.pid), arguments.count > 1 else { return nil }
+        let joined = arguments.joined(separator: " ")
+        if joined.contains("GradleDaemon") {
+            let version = joined.range(of: #"gradle-(\d+(\.\d+)+)"#, options: .regularExpression)
+                .map { String(joined[$0].dropFirst("gradle-".count)) }
+            return ["Gradle daemon", version].compactMap { $0 }.joined(separator: " ")
+        }
+        if joined.contains("KotlinCompileDaemon") { return "Kotlin compile daemon" }
+        if joined.contains("GradleWrapperMain") || joined.contains("gradle-wrapper.jar") { return "Gradle build" }
+        if let jar = arguments.firstIndex(of: "-jar").flatMap({ arguments[safe: $0 + 1] }) {
+            return (jar as NSString).lastPathComponent
+        }
+        if let module = arguments.firstIndex(of: "-m").flatMap({ arguments[safe: $0 + 1] }) {
+            return "\(process.name) -m \(module)"
+        }
+        // node/python/ruby: the first argument that isn't an option is the script.
+        if process.name != "java", let script = arguments.dropFirst().first(where: { !$0.hasPrefix("-") }) {
+            return (script as NSString).lastPathComponent
+        }
+        return nil
+    }
+
+    /// A process's argv via `KERN_PROCARGS2`: argc, the executable path, then
+    /// the NUL-separated arguments.
+    private static func arguments(of pid: pid_t) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+        let argc = buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        var index = MemoryLayout<Int32>.size
+        // Skip the executable path and the NUL padding after it.
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        var arguments: [String] = []
+        while arguments.count < argc, index < size {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            arguments.append(String(decoding: buffer[start..<index], as: UTF8.self))
+            index += 1
+        }
+        return arguments
+    }
+
+    /// The project a process is working on, for its row's subtitle — found, in
+    /// order, from its own current folder, the nearest parent's (a
+    /// swift-frontend runs in `/`-less SWBBuildService, but its xcodebuild and
+    /// the shell above it sit in the project), or — for a process that has
+    /// detached to launchd and works from `/`, like ibtoold — the files it has
+    /// open. Named after the enclosing git repository, so a build in
+    /// `tour-list/app/ios` reads "tour-list", not "ios".
+    final class ProjectFolders {
+        private let processes: [pid_t: ProcessReading]
+        private var folderOf: [pid_t: String?] = [:]
+        private var nameOf: [String: String] = [:]
+
+        init(processes: [pid_t: ProcessReading]) {
+            self.processes = processes
+        }
+
+        func project(of process: ProcessReading) -> String? {
+            let folder = folder(of: process.pid, depth: 0)
+                ?? (process.parent == 1 ? ProcessSampler.openFileFolder(of: process.pid) : nil)
+            return folder.map(projectName)
+        }
+
+        /// Memoised, so walking every process's parents stays linear.
+        private func folder(of pid: pid_t, depth: Int) -> String? {
+            if let known = folderOf[pid] { return known }
+            var found = ProcessSampler.workFolder(of: pid)
+            if found == nil, depth < 16, let parent = processes[pid]?.parent, parent > 1 {
+                found = folder(of: parent, depth: depth + 1)
+            }
+            folderOf[pid] = found
+            return found
+        }
+
+        private func projectName(_ folder: String) -> String {
+            if let known = nameOf[folder] { return known }
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            var cursor = folder
+            var name = (folder as NSString).lastPathComponent
+            while cursor.hasPrefix(home + "/") {
+                if FileManager.default.fileExists(atPath: cursor + "/.git") {
+                    name = (cursor as NSString).lastPathComponent
+                    break
+                }
+                cursor = (cursor as NSString).deletingLastPathComponent
+            }
+            nameOf[folder] = name
+            return name
+        }
+    }
+
+    /// The first open file or folder of `pid` that looks like project work.
+    /// Only asked for detached processes — listing descriptors is a few
+    /// syscalls per file.
+    static func openFileFolder(of pid: pid_t) -> String? {
+        let bufferSize = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard bufferSize > 0 else { return nil }
+        let count = Int(bufferSize) / MemoryLayout<proc_fdinfo>.stride
+        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: count)
+        let filled = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &descriptors, bufferSize)
+        guard filled > 0 else { return nil }
+        for descriptor in descriptors.prefix(min(Int(filled) / MemoryLayout<proc_fdinfo>.stride, 256))
+        where descriptor.proc_fdtype == PROX_FDTYPE_VNODE {
+            var info = vnode_fdinfowithpath()
+            let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
+            guard proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, size) == size else { continue }
+            let path = withUnsafeBytes(of: &info.pvip.vip_path) { buffer in
+                String(cString: buffer.bindMemory(to: CChar.self).baseAddress!)
+            }
+            var isDirectory: ObjCBool = false
+            FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            if let folder = projectPath(isDirectory.boolValue ? path : (path as NSString).deletingLastPathComponent) {
+                return folder
+            }
+        }
+        return nil
+    }
+
     /// The project folder a process works in, judged by its current directory —
     /// or nil when that says nothing about a project (/, the home folder,
     /// ~/Library, app bundles, system folders).
@@ -377,6 +604,11 @@ final class ProcessSampler {
         let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { buffer in
             String(cString: buffer.bindMemory(to: CChar.self).baseAddress!)
         }
+        return projectPath(path)
+    }
+
+    /// `path` if it could be someone's project, not a system or app location.
+    private static func projectPath(_ path: String) -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         guard !path.isEmpty, path != "/", path != home, !path.hasPrefix(home + "/Library"), !path.hasPrefix(home + "/."),
               !["/System", "/Applications", "/Library", "/private", "/usr", "/opt"].contains(where: { path.hasPrefix($0) }) else {

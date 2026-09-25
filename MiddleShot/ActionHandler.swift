@@ -81,6 +81,12 @@ final class ActionHandler {
             // the pasteboard. A non-zero status is the ordinary "user pressed
             // Escape" path, so it is not logged as an error.
             let captured = process.terminationStatus == 0
+            // Escape is status 1; a clean exit with no file afterwards is the
+            // tell of a capture macOS refused (Screen Recording), so both the
+            // status and whether the file exists are logged.
+            os_log("screencapture exited %d, file %{public}@", log: log, type: .info,
+                   process.terminationStatus,
+                   destination.map { FileManager.default.fileExists(atPath: $0.path) ? "saved" : "missing" } ?? "n/a")
             DispatchQueue.main.async {
                 self?.runningCapture = nil
                 if captured, let destination,
