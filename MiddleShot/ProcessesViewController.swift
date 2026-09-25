@@ -77,8 +77,14 @@ final class ProcessesViewController: NSViewController, DashboardPanel, NSOutline
         filterControl.selectedSegment = showsAllProcesses ? 1 : 0
         filterControl.target = self
         filterControl.action = #selector(filterChanged)
-        let tools = NSStackView(views: [filterControl, NSView(), asideLabel])
+        autoRefreshBox.controlSize = .small
+        autoRefreshBox.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        autoRefreshBox.state = Settings.processesAutoRefresh ? .on : .off
+        autoRefreshBox.target = self
+        autoRefreshBox.action = #selector(autoRefreshToggled)
+        let tools = NSStackView(views: [filterControl, autoRefreshBox, NSView(), asideLabel])
         tools.spacing = 8
+        tools.setCustomSpacing(14, after: filterControl)
 
         configureOutline()
         placeholder.onAction = { [weak self] in self?.startRefresh() }
@@ -182,8 +188,68 @@ final class ProcessesViewController: NSViewController, DashboardPanel, NSOutline
 
     // MARK: - DashboardPanel
 
+    // MARK: - Auto refresh
+
+    /// The one exception to the Dashboard's manual refresh (user decision,
+    /// 2026-09-25): like Activity Monitor's default, a fresh snapshot every
+    /// 5 s while this tab is on screen. A sample is ~1 s of `proc_pid_rusage`
+    /// deltas, light enough to repeat; the Disk tab's minute-long walk is not.
+    static let autoRefreshInterval: TimeInterval = 5
+
+    private var autoTimer: Timer?
+    /// An automatic round runs quietly: it doesn't turn Refresh into Stop or
+    /// dim the list, it just swaps in the new numbers when they're ready.
+    private var quietSampler: ProcessSampler?
+    private let autoRefreshBox = NSButton(checkboxWithTitle: "Auto-refresh every 5 s", target: nil, action: nil)
+
+    /// Called by the window with whether this tab is currently on screen.
+    func setOnScreen(_ onScreen: Bool) {
+        guard onScreen, Settings.processesAutoRefresh else {
+            autoTimer?.invalidate()
+            autoTimer = nil
+            quietSampler?.cancel()
+            quietSampler = nil
+            return
+        }
+        guard autoTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.autoRefreshInterval, repeats: true) { [weak self] _ in
+            self?.autoRefresh()
+        }
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        autoTimer = timer
+        // Coming back to a stale snapshot: refresh now rather than in 5 s.
+        if let snapshot, Date().timeIntervalSince(snapshot.takenAt) < Self.autoRefreshInterval { return }
+        snapshot == nil ? startRefresh() : autoRefresh()
+    }
+
+    private func autoRefresh() {
+        guard sampler == nil, quietSampler == nil, let window = view.window,
+              window.occlusionState.contains(.visible),
+              // The rows a confirmation describes must not move under it.
+              window.attachedSheet == nil else { return }
+        let sampler = ProcessSampler()
+        quietSampler = sampler
+        sampler.sample { [weak self, weak sampler] snapshot in
+            guard let self, let sampler, self.quietSampler === sampler else { return }
+            self.quietSampler = nil
+            // A sheet that opened during the second of sampling wins too.
+            guard let snapshot, self.view.window?.attachedSheet == nil else { return }
+            self.snapshot = snapshot
+            self.render()
+        }
+    }
+
+    @objc private func autoRefreshToggled() {
+        Settings.processesAutoRefresh = autoRefreshBox.state == .on
+        setOnScreen(Settings.processesAutoRefresh && !view.isHidden && view.window?.isVisible == true)
+        render()
+    }
+
     func startRefresh() {
         guard sampler == nil else { return }
+        quietSampler?.cancel()
+        quietSampler = nil
         toast.dismiss()
         let sampler = ProcessSampler()
         self.sampler = sampler
@@ -240,7 +306,9 @@ final class ProcessesViewController: NSViewController, DashboardPanel, NSOutline
                 placeholder.showWorking(title: "Sampling CPU…", message: "Measuring every process for one second.")
             } else {
                 placeholder.showEmpty(symbol: "cpu", title: "No snapshot yet",
-                                      message: "Takes about a second. The numbers stay as they are until you press Refresh again.",
+                                      message: Settings.processesAutoRefresh
+                                        ? "Takes about a second, then refreshes every 5 seconds while this tab is open."
+                                        : "Takes about a second. The numbers stay as they are until you press Refresh again.",
                                       actionTitle: "Take Snapshot")
             }
         }

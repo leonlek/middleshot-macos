@@ -358,21 +358,26 @@ final class DiskModule: NSObject, MenuBarModule {
                                              widest: ["999G", "99.9G", "9.9T"], color: color)
         case .graphsAndNumbers, .graphs:
             // Free space stays in Icons Only too — it's the number that matters.
+            // Number over unit ("8.5" / "GB") rather than "8.5 GB" over "free":
+            // the slot is as wide as its widest value, and the unit on its own
+            // line takes ~15 pt off that. The bar already says it's free space.
             let labeled = style == .graphsAndNumbers
             let labelWidth = labeled ? MenuBarDrawing.verticalLabelWidth : 0
             let valueFont = MenuBarDrawing.smallFont, captionFont = MenuBarDrawing.captionFont
-            let textWidth = max(MenuBarDrawing.maxWidth(of: ["99.9 GB", "999 GB", "999 MB", "9.9 TB"], font: valueFont),
-                                MenuBarDrawing.maxWidth(of: ["free"], font: captionFont))
+            let textWidth = max(MenuBarDrawing.maxWidth(of: ["99.9", "999"], font: valueFont),
+                                MenuBarDrawing.maxWidth(of: ["GB", "MB", "TB"], font: captionFont))
             let text = space.map { MenuBarDrawing.freeSpace($0.available) } ?? "—"
+            let pieces = text.split(separator: " ", maxSplits: 1).map(String.init)
+            let number = pieces.first ?? "—", unit = pieces.count > 1 ? pieces[1] : ""
             let key = "ssd\(labeled)\(text)\(MenuBarDrawing.pixelKey(1 - freeFraction))\(tint)"
-            return MenuBarPart(width: labelWidth + 10 + textWidth, key: key) { x in
+            return MenuBarPart(width: labelWidth + 9 + textWidth, key: key) { x in
                 if labeled { MenuBarDrawing.drawVerticalLabel("SSD", x: x, color: color) }
                 MenuBarDrawing.drawLevelBar(fraction: 1 - freeFraction, x: x + labelWidth, tint: tint, color: color)
-                let textX = x + labelWidth + 10
+                let textX = x + labelWidth + 9
                 let ink = MenuBarDrawing.ink(color)
-                MenuBarDrawing.drawText(text, x: textX, baseline: MenuBarDrawing.bandTop - valueFont.capHeight,
+                MenuBarDrawing.drawText(number, x: textX, baseline: MenuBarDrawing.bandTop - valueFont.capHeight,
                                         font: valueFont, color: ink)
-                MenuBarDrawing.drawText("free", x: textX, baseline: MenuBarDrawing.bandBottom, font: captionFont,
+                MenuBarDrawing.drawText(unit, x: textX, baseline: MenuBarDrawing.bandBottom, font: captionFont,
                                         color: ink.withAlphaComponent(0.7))
             }
         }
@@ -436,5 +441,245 @@ final class DiskModule: NSObject, MenuBarModule {
             .init(values: read.values, color: DashboardStyle.seriesBlue),
             .init(values: write.values, color: DashboardStyle.seriesOrange),
         ]
+    }
+}
+
+// MARK: - Sensors
+
+/// CPU temperature and fan speed in one slot; every sensor and fan in the
+/// dropdown. Readings come from the SMC on a background queue (`Sensors`), so
+/// the menu bar shows the previous tick's values — a second old at most.
+final class SensorsModule: MenuBarModule {
+    let id = "sensors"
+    let title = "Temperature & Fans"
+    let symbolName = "thermometer.medium"
+
+    private let sensors = Sensors()
+    private var reading: Sensors.Reading?
+    /// The last full read: SSD and battery are only read then.
+    private var fullReading: Sensors.Reading?
+    private var isOpen = false
+    private var cpu = SampleHistory()
+    private var gpu = SampleHistory()
+
+    private let value = MenuSection.bigLabel()
+    private let detail = MenuSection.detailLabel()
+    private let cpuItem = MenuSection.legendItem("CPU", color: DashboardStyle.seriesBlue)
+    private let gpuItem = MenuSection.legendItem("GPU", color: DashboardStyle.seriesOrange)
+    private let chart = HistoryChartView()
+    private let temperatureRows = (0..<4).map { _ in MenuSection.pairRow() }
+    private let fansCaption = MenuSection.caption("Fans")
+    private let fanRows = NSStackView()
+    private var fanLines: [(row: NSView, name: NSTextField, value: NSTextField, bar: BarView)] = []
+    private(set) lazy var menuSection: NSView = {
+        chart.maximum = 110
+        chart.maximumLabel = "110°C"
+        chart.onHover = { [weak self] _ in self?.refresh() }
+        fanRows.orientation = .vertical
+        fanRows.alignment = .leading
+        fanRows.spacing = 3
+        fansCaption.isHidden = true
+        let section = MenuSection.make(title: "Temperature", value: value, rows: [
+            detail, MenuSection.legendLine([cpuItem.view, gpuItem.view]), chart,
+        ] + temperatureRows.map(\.row) + [fansCaption, fanRows])
+        section.setCustomSpacing(6, after: chart)
+        return section
+    }()
+
+    var accessibilityDescription: String {
+        var parts = [reading?.cpuAverage.map { "CPU \(Self.degrees($0))" } ?? "Temperature unavailable"]
+        if let fan = reading?.fans.max(by: { $0.current < $1.current }) { parts.append("fan \(Self.rpm(fan.current))") }
+        return parts.joined(separator: ", ")
+    }
+
+    func sample(now: TimeInterval) {
+        // The first read is a full one, so the dropdown knows from the start
+        // which rows (SSD, battery, how many fans) this Mac has.
+        let full = isOpen || fullReading == nil
+        sensors.read(full: full) { [weak self] reading in
+            guard let self, let reading else { return }
+            self.reading = reading
+            if full { self.fullReading = reading }
+            if let average = reading.cpuAverage { self.cpu.append(average) }
+            if let average = reading.gpuAverage { self.gpu.append(average) }
+            self.buildFanRowsIfNeeded(count: reading.fans.count)
+        }
+    }
+
+    func resetHistory() {
+        cpu.removeAll()
+        gpu.removeAll()
+    }
+
+    func part(style: MenuBarStatsStyle, color: Bool) -> MenuBarPart {
+        let temperature = reading?.cpuAverage
+        let tint = Self.tint(temperature)
+        let degrees = temperature.map(Self.degrees) ?? "—"
+        let fan = reading?.fans.max(by: { $0.current < $1.current })
+        let fanText = fan.map { Self.shortRPM($0.current) }
+        switch style {
+        case .numbers:
+            let font = MenuBarDrawing.numberFont, labelFont = MenuBarDrawing.numberLabelFont
+            let degreesWidth = MenuBarDrawing.maxWidth(of: ["100°"], font: font)
+            let fanLabelWidth = MenuBarDrawing.maxWidth(of: ["FAN"], font: labelFont)
+            let fanWidth = MenuBarDrawing.maxWidth(of: ["9.9k", "off"], font: font)
+            let hasFan = fanText != nil
+            let width = degreesWidth + (hasFan ? 6 + fanLabelWidth + 4 + fanWidth : 0)
+            return MenuBarPart(width: width, key: "tmp#\(degrees)|\(fanText ?? "")") { x in
+                let baseline = MenuBarDrawing.centeredBaseline(for: font)
+                let ink = MenuBarDrawing.ink(color)
+                MenuBarDrawing.drawText(degrees, right: x + degreesWidth, baseline: baseline, font: font, color: ink)
+                guard let fanText else { return }
+                let fanX = x + degreesWidth + 6
+                MenuBarDrawing.drawText("FAN", x: fanX, baseline: baseline, font: labelFont, color: ink.withAlphaComponent(0.7))
+                MenuBarDrawing.drawText(fanText, right: fanX + fanLabelWidth + 4 + fanWidth, baseline: baseline,
+                                        font: font, color: ink)
+            }
+        case .graphsAndNumbers, .graphs:
+            // "81°C" over a fan glyph and "3.8k" beside a gauge. No stacked label
+            // and no "rpm": the degree sign and the fan say what each line is,
+            // and the slot is as wide as its widest line.
+            let valueFont = MenuBarDrawing.smallFont, captionFont = MenuBarDrawing.captionFont
+            let glyphSide = captionFont.capHeight + 3.5
+            let bottom = fanText ?? "CPU"
+            let textWidth = max(MenuBarDrawing.maxWidth(of: ["100°C"], font: valueFont),
+                                glyphSide + 1.5 + MenuBarDrawing.maxWidth(of: ["9.9k", "off"], font: captionFont))
+            let fraction = temperature.map { ($0 - 30) / 70 } ?? 0
+            let key = "tmp\(degrees)|\(bottom)|\(MenuBarDrawing.pixelKey(fraction))|\(tint)"
+            return MenuBarPart(width: 9 + textWidth, key: key) { x in
+                MenuBarDrawing.drawLevelBar(fraction: fraction, x: x, tint: tint, color: color)
+                let ink = MenuBarDrawing.ink(color)
+                MenuBarDrawing.drawText(temperature.map { Self.degrees($0) + "C" } ?? "—", x: x + 9,
+                                        baseline: MenuBarDrawing.bandTop - valueFont.capHeight, font: valueFont, color: ink)
+                var textX = x + 9
+                if fanText != nil {
+                    Self.drawFan(in: NSRect(x: textX, y: MenuBarDrawing.bandBottom - 1.5,
+                                            width: glyphSide, height: glyphSide),
+                                 color: ink.withAlphaComponent(0.7))
+                    textX += glyphSide + 1.5
+                }
+                MenuBarDrawing.drawText(bottom, x: textX, baseline: MenuBarDrawing.bandBottom, font: captionFont,
+                                        color: ink.withAlphaComponent(0.7))
+            }
+        }
+    }
+
+    func updateMenuSection(_ timeline: MenuBarTimeline) {
+        chart.timeline = timeline
+        refresh()
+    }
+
+    func menuWillOpen() {
+        isOpen = true
+        buildFanRowsIfNeeded(count: reading?.fans.count ?? 0)
+        let rows = temperatureRows(fullReading)
+        for (index, line) in temperatureRows.enumerated() {
+            line.row.isHidden = index >= rows.count
+        }
+    }
+
+    func menuDidClose() {
+        isOpen = false
+        chart.clearHover()
+    }
+
+    private func refresh() {
+        let latest = isOpen ? reading : reading ?? fullReading
+        value.stringValue = latest?.cpuAverage.map { Self.degrees($0) + "C" } ?? "—"
+        if let index = chart.hoverIndex, let past = cpu.values[safe: index] {
+            detail.stringValue = "CPU \(Self.degrees(past))C at the marked moment"
+        } else if let hottest = latest?.cpu.max() {
+            detail.stringValue = "CPU average · hottest sensor \(Self.degrees(hottest))C"
+        } else {
+            detail.stringValue = "No temperature sensors found"
+        }
+        let index = chart.hoverIndex
+        cpuItem.value.stringValue = (index.flatMap { cpu.values[safe: $0] } ?? latest?.cpuAverage).map(Self.degrees) ?? "—"
+        gpuItem.value.stringValue = (index.flatMap { gpu.values[safe: $0] } ?? latest?.gpuAverage).map(Self.degrees) ?? "—"
+        chart.series = [
+            .init(values: cpu.values, color: DashboardStyle.seriesBlue),
+            .init(values: gpu.values, color: DashboardStyle.seriesOrange),
+        ]
+
+        // While open every tick is a full read; closed (a hover bubble), SSD and
+        // battery come from the last full one.
+        var merged = latest ?? Sensors.Reading()
+        if merged.ssd.isEmpty { merged.ssd = fullReading?.ssd ?? [] }
+        if merged.battery.isEmpty { merged.battery = fullReading?.battery ?? [] }
+        for (line, row) in zip(temperatureRows, temperatureRows(merged)) {
+            line.name.stringValue = row.name
+            line.value.stringValue = row.value
+        }
+        for (line, fan) in zip(fanLines, latest?.fans ?? []) {
+            line.value.stringValue = fan.current < 1 ? "off"
+                : "\(Self.rpm(fan.current)) · \(Int((fan.fraction * 100).rounded()))%"
+            line.bar.segments = [.init(fraction: fan.maximum > 0 ? fan.current / fan.maximum : 0,
+                                       color: DashboardStyle.seriesAqua)]
+        }
+    }
+
+    private func temperatureRows(_ reading: Sensors.Reading?) -> [(name: String, value: String)] {
+        guard let reading else { return [] }
+        var rows: [(String, String)] = []
+        if let average = reading.cpuAverage, let hottest = reading.cpu.max() {
+            rows.append(("CPU (\(reading.cpu.count) sensors)", "\(Self.degrees(average))C · max \(Self.degrees(hottest))C"))
+        }
+        if let average = reading.gpuAverage { rows.append(("GPU", Self.degrees(average) + "C")) }
+        if let ssd = reading.ssd.max() { rows.append(("SSD", Self.degrees(ssd) + "C")) }
+        if let battery = reading.battery.max() { rows.append(("Battery", Self.degrees(battery) + "C")) }
+        return rows
+    }
+
+    /// Fan rows are made once, when the fan count is first known — a Mac
+    /// doesn't grow fans, and a menu item's view mustn't resize while shown.
+    private func buildFanRowsIfNeeded(count: Int) {
+        guard fanLines.isEmpty, count > 0 else { return }
+        for index in 0..<count {
+            let pair = MenuSection.pairRow()
+            pair.name.stringValue = count == 1 ? "Fan" : "Fan \(index + 1)"
+            let bar = BarView(thickness: 4)
+            let line = NSStackView(views: [pair.row, bar])
+            line.orientation = .vertical
+            line.alignment = .leading
+            line.spacing = 2
+            pair.row.widthAnchor.constraint(equalTo: line.widthAnchor).isActive = true
+            bar.widthAnchor.constraint(equalTo: line.widthAnchor).isActive = true
+            fanRows.addArrangedSubview(line)
+            line.widthAnchor.constraint(equalTo: fanRows.widthAnchor).isActive = true
+            fanLines.append((line, pair.name, pair.value, bar))
+        }
+        fansCaption.isHidden = false
+    }
+
+    private static func tint(_ temperature: Double?) -> NSColor {
+        guard let temperature else { return DashboardStyle.seriesBlue }
+        return temperature >= 95 ? .systemRed : temperature >= 85 ? .systemOrange : DashboardStyle.seriesBlue
+    }
+
+    /// The `fan.fill` symbol in one flat color, so it tints like text (and
+    /// turns black in a template image).
+    private static func drawFan(in rect: NSRect, color: NSColor) {
+        let configuration = NSImage.SymbolConfiguration(pointSize: rect.height, weight: .semibold)
+            .applying(.init(paletteColors: [color]))
+        guard let symbol = NSImage(systemSymbolName: "fan.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) else { return }
+        // Fit the symbol's own aspect inside the square, centred.
+        let scale = min(rect.width / symbol.size.width, rect.height / symbol.size.height)
+        let size = NSSize(width: symbol.size.width * scale, height: symbol.size.height * scale)
+        symbol.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
+                               width: size.width, height: size.height))
+    }
+
+    static func degrees(_ celsius: Double) -> String { "\(Int(celsius.rounded()))°" }
+
+    static func rpm(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return (formatter.string(from: NSNumber(value: Int(value.rounded()))) ?? "\(Int(value))") + " rpm"
+    }
+
+    /// "3.8k", or "off" for a stopped fan.
+    static func shortRPM(_ value: Double) -> String {
+        value < 1 ? "off" : String(format: "%.1fk", value / 1000)
     }
 }

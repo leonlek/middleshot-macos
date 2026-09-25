@@ -12,6 +12,7 @@ enum Settings {
     private static let dashboardTabKey = "dashboardTab"
     private static let diskScanScopeKey = "diskScanScope"
     private static let showsAllProcessesKey = "showsAllProcesses"
+    private static let processesAutoRefreshKey = "processesAutoRefresh"
     private static let diskShowsCleanupKey = "diskShowsCleanup"
     private static let diskScanInclusionsKey = "diskScanInclusions"
     private static let menuBarModuleOrderKey = "menuBarModuleOrder"
@@ -89,6 +90,13 @@ enum Settings {
     static var showsAllProcesses: Bool {
         get { UserDefaults.standard.bool(forKey: showsAllProcessesKey) }
         set { UserDefaults.standard.set(newValue, forKey: showsAllProcessesKey) }
+    }
+
+    /// Whether the CPU & Memory tab takes a new snapshot every 5 s while it is
+    /// on screen. On by default — Activity Monitor refreshes the same way.
+    static var processesAutoRefresh: Bool {
+        get { bool(processesAutoRefreshKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: processesAutoRefreshKey) }
     }
 
     /// Whether the Disk tab shows Safe to Clean instead of Largest Items.

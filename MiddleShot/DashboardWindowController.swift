@@ -96,6 +96,7 @@ final class DashboardWindowController: NSWindowController, NSWindowDelegate, NST
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         updateToolbar()
+        processPanel.setOnScreen(tab == .processes)
         stampTimer?.invalidate()
         // Only the "3 min ago" text ticks — never the data.
         stampTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -120,6 +121,7 @@ final class DashboardWindowController: NSWindowController, NSWindowDelegate, NST
         // A scan nobody can see is just load on the disk.
         diskPanel.stopRefresh(announce: false)
         processPanel.stopRefresh(announce: false)
+        processPanel.setOnScreen(false)
         stampTimer?.invalidate()
         stampTimer = nil
         NSApp.setActivationPolicy(.accessory)
@@ -146,6 +148,7 @@ final class DashboardWindowController: NSWindowController, NSWindowDelegate, NST
     private func showSelectedTab() {
         diskPanel.view.isHidden = tab != .disk
         processPanel.view.isHidden = tab != .processes
+        processPanel.setOnScreen(tab == .processes && window?.isVisible == true)
         updateToolbar()
     }
 

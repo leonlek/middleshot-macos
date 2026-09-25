@@ -76,6 +76,7 @@ MiddleShot/
 ├── MagicMouseListener.swift   # MultitouchSupport bridge — enumerates Magic Mouse + trackpad
 ├── GestureDetector.swift      # state machines: N-finger click / tap / double-tap
 ├── PermissionHelper.swift     # prompts + status checks for Accessibility / Input / Screen
+├── SMC.swift                 # AppleSMC reader + Sensors (temperatures, fans) on a background queue
 ├── ScreenshotFile.swift       # names the silent capture's destination from com.apple.screencapture
 ├── Settings.swift             # UserDefaults-backed prefs (thumbnail, clipboard, dashboard)
 ├── DashboardWindowController.swift  # Dashboard window, toolbar, Dock/menu-bar policy switch
@@ -89,7 +90,7 @@ MiddleShot/
 ├── SystemStats.swift          # whole-machine CPU ticks, memory, network + disk counters, disk space
 ├── MenuBarStatsController.swift     # stats status item: module order/visibility, timer, dropdown, submenu
 ├── MenuBarModule.swift        # MenuBarModule protocol + dropdown building blocks + history chart
-├── MenuBarModules.swift       # CPU, Memory, Network, Disk modules
+├── MenuBarModules.swift       # CPU, Memory, Network, Disk, Temperature & Fans modules
 ├── MenuBarDrawing.swift       # shared menu bar geometry, formatting, drawing primitives
 ├── MenuBarStatsSettingsWindowController.swift  # drag-to-reorder / show-hide window
 ├── Info.plist
@@ -100,9 +101,10 @@ MiddleShot/
 
 Two tabs — **Disk** and **CPU & Memory** — each showing a top-10 list with a destructive action per row. Decisions (from the user, 2026-09-13 — don't relitigate):
 
-- **Never refreshes on its own.** No scan or sample runs until Refresh (⌘R) or the empty state's button is pressed — not even on first open. While working, Refresh becomes **Stop** (⌘.); stopping keeps the previous results. Only the "Updated 14:32 · 3 min ago" text ticks (turns orange at 10 min).
+- **Never refreshes on its own** — except CPU & Memory (below). No scan runs until Refresh (⌘R) or the empty state's button is pressed — not even on first open. While working, Refresh becomes **Stop** (⌘.); stopping keeps the previous results. Only the "Updated 14:32 · 3 min ago" text ticks (turns orange at 10 min).
 - **Dock / ⌘-Tab while open.** Opening switches `NSApp` to `.regular` (drawn Dock icon + a minimal main menu); closing returns to `.accessory` and stops any running scan. The controller lives for the app's lifetime, so results survive closing the window.
 - **Disk scope is selectable:** Home Folder (default) or Entire Disk, each keeping its own last result. Skipped (no-access) folders are counted, with a link to Full Disk Access — the app never requires it.
+- **CPU & Memory auto-refreshes every 5 s** (user decision 2026-09-25, Activity Monitor's default; "Auto-refresh every 5 s" checkbox, `Settings.processesAutoRefresh`, on by default) — only while that tab is on screen and the window visible, and it skips a round while a confirmation sheet is up so rows never move under it. Automatic rounds are quiet (separate `quietSampler`): Refresh doesn't turn into Stop and the list isn't dimmed. Disk never auto-refreshes (a scan is a minute of I/O).
 - **CPU & Memory:** Apps (default — helpers folded into their app by bundle path or parent chain) or All Processes. In Apps mode an app row expands: **VS Code-family editors split into one row per window and per Claude Code session**, each with its own Force Quit (a window's = its extension host subtree + terminal programs working inside its folder; the window itself stays open). A window has no id on its extension host (`… Helper (Plugin)` child of the main process), so it is named after the most common working folder (`PROC_PIDVNODEPATHINFO`) of its processes. Main process / renderers / GPU form a "Shared" group that is never force quit piecemeal. Group Force Quit re-checks every PID's start time and kills children first. Root-owned processes can't be measured without privileges (`proc_pid_rusage` fails), so they are left out and counted in the status line rather than shown as zeros.
 - **Removal is Move to Trash** (`FileManager.trashItem`) with an Undo toast — never a permanent delete. Force Quit uses `NSRunningApplication.forceTerminate()` for apps, `SIGKILL` otherwise.
 - **Always confirm.** Sheets use `hasDestructiveAction`; macOS then assigns no default button, so **Return does nothing and Escape cancels**. Don't bind Return to Cancel by hand — a button holds one key equivalent, and Escape stops working (tested).
@@ -125,7 +127,8 @@ One status item (left of MiddleShot's own) built from **modules** — Network, M
 
 - **One combined item**, not one per metric. Modules can be **reordered (drag) and shown/hidden (checkbox)** in "Reorder & Customize…"; order is left→right in the bar and top→bottom in the dropdown. Hiding all removes the item.
 - **Adding a stat = one class conforming to `MenuBarModule`** (id, title, symbol, `sample`, `part(style:color:)`, `menuSection`, …) plus one line in `MenuBarStatsController.modules`. Order/visibility live in `Settings.menuBarModuleOrder` / `menuBarModulesEnabled` keyed by module `id` — never rename an id. Only shown modules sample.
-- **Disk** shows free space on the startup disk (GB, bar turns orange < 10 % free, red < 5 %; re-read every 30 s and on menu open). External drives appear **only in the dropdown**, along with read/write rates (IOBlockStorageDriver statistics, disk images excluded) and the Dashboard's last Safe to Clean total.
+- **Temperature & Fans** (`SensorsModule`, `SMC.swift`): one slot — CPU average °C over the fastest fan's speed ("✇ 3.9k"; a fan glyph instead of "rpm" to keep it narrow), gauge tinted orange ≥ 85 °C, red ≥ 95 °C; the dropdown has the CPU/GPU graph, CPU (avg + hottest), GPU, SSD, battery and every fan. Read from the SMC through the `AppleSMC` user client — **no root needed**. Keys are discovered once by listing all ~2,000 (`#KEY` + read-by-index; Apple Silicon `Tp`/`Te` = CPU, `Tg` GPU, `TH0` SSD, `TB?T` battery, `F<n>Ac/Mn/Mx` fans; Intel falls back to `TC…`/`TG…`) instead of per-chip tables. Each SMC call is ~0.7 ms of mostly kernel wait, so reads run on a serial background queue: a tick reads an even spread of 8 CPU + GPU sensors + fan speeds (min/max cached at discovery); every sensor only while the dropdown is open. Measured 2026-09-25: 60 ticks cost 30 ms CPU (~0.05 % of a core). **`SMCKeyData_t` needs 3 padding bytes after `dataAttributes`** — without them every read returns empty.
+- **Disk** shows free space on the startup disk (number over its unit — "10.4" / "GB" — to keep the slot narrow; bar turns orange < 10 % free, red < 5 %; re-read every 30 s and on menu open). External drives appear **only in the dropdown**, along with read/write rates (IOBlockStorageDriver statistics, disk images excluded) and the Dashboard's last Safe to Clean total.
 - **All three styles selectable** — Graphs & Numbers (iStat-like), Numbers Only, Icons Only (the same full-size icons without the MEM/CPU labels; network keeps its rates, the user wants to see how much is used) — plus Color Graphs on/off (off = template image, tinted by macOS).
 - **Refreshes itself every 1 s by default** (2 / 5 s selectable) — the one deliberate exception to the Dashboard's manual refresh. Each tick is only `host_statistics`, `host_statistics64`, and one `NET_RT_IFLIST2` sysctl; the per-process sample behind "Using the most CPU/memory" runs only while the dropdown is open.
 - **Network counts `en*` only** — no VPN (`utun*`), since tunnelled traffic already crosses a physical port. Use `NET_RT_IFLIST2` (`if_msghdr2` / 64-bit `if_data64`); `getifaddrs`' `if_data` is 32-bit and wraps at 4 GB.

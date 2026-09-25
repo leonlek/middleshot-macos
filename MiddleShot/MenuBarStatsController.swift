@@ -26,7 +26,7 @@ final class MenuBarStatsController: NSObject, NSMenuDelegate {
     private let disk = DiskModule()
     private let cpu = CPUModule()
     /// Every module, in its default order. A new module goes here.
-    private(set) lazy var modules: [MenuBarModule] = [NetworkModule(), MemoryModule(), cpu, disk]
+    private(set) lazy var modules: [MenuBarModule] = [NetworkModule(), MemoryModule(), cpu, SensorsModule(), disk]
 
     private let cpuAlert = CPUAlertMonitor()
     private var alertPopover: NSPopover?
