@@ -210,7 +210,10 @@ No Xcode project — `build.sh` drives `swiftc` directly. There are too few sour
 ./build.sh              # debug build
 ./build.sh release      # optimized
 open build/MiddleShot.app
+./install.sh            # build release → /Applications/MiddleShot.app, quit the old copy, relaunch
 ```
+
+**The installed copy lives in `/Applications`** (user decision 2026-09-26): Launch at Login and System Settings › Login Items pick the app up from there, and a login item pointing into `build/` breaks every rebuild. After changing code, `./install.sh` (not `open build/…`) is how it gets onto this Mac. Only one copy may run: at launch, a second MiddleShot (same bundle id) quits itself so two event taps never answer the same gesture. "Restart MiddleShot" in the menu relaunches the same bundle after the old process has exited.
 
 The script ad-hoc signs the bundle. macOS *will* remember Accessibility / Input Monitoring grants across rebuilds with ad-hoc signing as long as the bundle identifier stays stable.
 

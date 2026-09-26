@@ -15,6 +15,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         os_log("MiddleShot launching", log: log, type: .info)
+        // A second copy (a stale login item for build/, a double-click on the
+        // other bundle) would install a second event tap and answer every
+        // gesture twice. The one already running wins.
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        if let running = others.first {
+            os_log("Another MiddleShot is running (pid %d, %{public}@) — quitting this copy",
+                   log: log, type: .info, running.processIdentifier, running.bundleURL?.path ?? "?")
+            NSApp.terminate(nil)
+            return
+        }
         PermissionHelper.ensureAccessibility()
         PermissionHelper.ensureInputMonitoring()
         PermissionHelper.ensureScreenRecording()

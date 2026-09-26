@@ -56,44 +56,51 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         menu.addItem(header)
         menu.addItem(.separator())
 
-        addItem(to: menu, title: "Open Dashboard…",
+        addItem(to: menu, title: "Open Dashboard…", symbol: "gauge.with.dots.needle.33percent",
                 action: #selector(openDashboard))
         let statsItem = NSMenuItem(title: "Menu Bar Stats", action: nil, keyEquivalent: "")
+        statsItem.image = Self.symbol("chart.bar.xaxis")
         statsItem.submenu = menuBarStats.makeSettingsMenu()
         menu.addItem(statsItem)
         menu.addItem(.separator())
 
         launchAtLoginItem.target = self
+        launchAtLoginItem.image = Self.symbol("power")
         menu.addItem(launchAtLoginItem)
         thumbnailItem.target = self
+        thumbnailItem.image = Self.symbol("photo.on.rectangle")
         thumbnailItem.toolTip = "Off: the capture saves straight to the "
             + "screenshot folder (Desktop by default) with no floating preview."
         menu.addItem(thumbnailItem)
         copyToClipboardItem.target = self
+        copyToClipboardItem.image = Self.symbol("doc.on.clipboard")
         copyToClipboardItem.toolTip = "Also put the capture on the clipboard, "
             + "ready to paste. Unavailable while the thumbnail is shown — drag "
             + "the thumbnail instead."
         menu.addItem(copyToClipboardItem)
         let saveLocationItem = NSMenuItem(title: "Save Screenshots To",
                                           action: nil, keyEquivalent: "")
+        saveLocationItem.image = Self.symbol("folder")
         saveLocationMenu.delegate = self
         saveLocationItem.submenu = saveLocationMenu
         menu.addItem(saveLocationItem)
-        addItem(to: menu, title: "Reload Devices",
+        addItem(to: menu, title: "Reload Devices", symbol: "magicmouse",
                 action: #selector(reloadDevices))
         menu.addItem(.separator())
 
-        addItem(to: menu, title: "Open Accessibility…",
+        addItem(to: menu, title: "Open Accessibility…", symbol: "accessibility",
                 action: #selector(openAccessibility))
-        addItem(to: menu, title: "Open Input Monitoring…",
+        addItem(to: menu, title: "Open Input Monitoring…", symbol: "keyboard",
                 action: #selector(openInputMonitoring))
-        addItem(to: menu, title: "Open Screen Recording…",
+        addItem(to: menu, title: "Open Screen Recording…", symbol: "rectangle.dashed.badge.record",
                 action: #selector(openScreenRecording))
 
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit MiddleShot",
-                     action: #selector(NSApplication.terminate(_:)),
-                     keyEquivalent: "q")
+        addItem(to: menu, title: "Restart MiddleShot", symbol: "arrow.clockwise", action: #selector(restart))
+        let quit = menu.addItem(withTitle: "Quit MiddleShot",
+                                action: #selector(NSApplication.terminate(_:)),
+                                keyEquivalent: "q")
+        quit.image = Self.symbol("xmark.rectangle")
 
         statusItem.menu = menu
     }
@@ -115,10 +122,17 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         item == copyToClipboardItem ? !Settings.showsScreenshotThumbnail : true
     }
 
-    private func addItem(to menu: NSMenu, title: String, action: Selector) {
+    private func addItem(to menu: NSMenu, title: String, symbol: String? = nil, action: Selector) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
+        item.image = symbol.flatMap(Self.symbol)
         menu.addItem(item)
+    }
+
+    /// A menu icon from an SF Symbol. A name this macOS doesn't have just
+    /// leaves the item without one.
+    private static func symbol(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)
     }
 
     /// "MiddleShot 0.2.0 (18 · efde0e6)" — build number and commit are stamped
@@ -158,6 +172,33 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         let created = DashboardWindowController()
         dashboard = created
         return created
+    }
+
+    /// Quits and opens this same bundle again — picks up a fresh build, or
+    /// clears whatever state a long run got into.
+    ///
+    /// The relaunch is handed to a small shell that waits for this process to
+    /// exit first: two copies running at once would both install event taps
+    /// and both answer every gesture. The shell outlives us (reparented to
+    /// launchd), and `open` starts the bundle the normal way, so permissions
+    /// and Launch at Login see the same app.
+    @objc private func restart() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$0\"",
+                          Bundle.main.bundlePath]
+        do {
+            try task.run()
+            os_log("Restarting from %{public}@", log: log, type: .info, Bundle.main.bundlePath)
+            NSApp.terminate(nil)
+        } catch {
+            os_log("Restart failed to launch helper: %{public}@", log: log, type: .error, "\(error)")
+            let alert = NSAlert()
+            alert.messageText = "Couldn't restart MiddleShot"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
     }
 
     @objc private func reloadDevices() {
