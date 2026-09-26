@@ -9,6 +9,8 @@ enum Settings {
     private static let showsScreenshotThumbnailKey = "showsScreenshotThumbnail"
     private static let copiesScreenshotToClipboardKey = "copiesScreenshotToClipboard"
     private static let screenshotFolderKey = "screenshotFolder"
+    private static let mouseCopyPasteKey = "mouseCopyPaste"
+    private static let showsCopyPasteHUDKey = "showsCopyPasteHUD"
     private static let dashboardTabKey = "dashboardTab"
     private static let diskScanScopeKey = "diskScanScope"
     private static let showsAllProcessesKey = "showsAllProcesses"
@@ -52,6 +54,19 @@ enum Settings {
             return defaults.bool(forKey: copiesScreenshotToClipboardKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: copiesScreenshotToClipboardKey) }
+    }
+
+    /// Magic Mouse 3-finger tap → Copy, 4-finger tap → Paste. On by default —
+    /// asked for (2026-09-26). Off, a single tap does nothing, as before.
+    static var mouseCopyPaste: Bool {
+        get { bool(mouseCopyPasteKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: mouseCopyPasteKey) }
+    }
+
+    /// The "Copied" / "Pasted" badge by the pointer.
+    static var showsCopyPasteHUD: Bool {
+        get { bool(showsCopyPasteHUDKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: showsCopyPasteHUDKey) }
     }
 
     /// MiddleShot's own save folder for silent captures, or nil to follow the

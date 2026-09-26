@@ -6,6 +6,8 @@ private let log = OSLog(subsystem: "app.middleshot", category: "mouse")
 final class GestureDetector {
     // Tuning constants — adjust after wearing the gestures for a few days.
     static let mouseFingerCount = 3
+    /// Magic Mouse paste (single tap); copy is a single tap with `mouseFingerCount`.
+    static let mousePasteFingerCount = 4
     static let trackpadFingerCount = 4
     static let maxTapDuration: TimeInterval = 0.5
     static let interTapGap: TimeInterval = 0.22
@@ -17,9 +19,12 @@ final class GestureDetector {
 
     private let actionHandler: ActionHandler
 
-    // Magic Mouse: only the double-tap recognizer (single 3-finger tap means nothing —
-    // middle click is triggered by a physical *click* via the CGEventTap).
+    // Magic Mouse 3 fingers: tap → copy, double tap → screenshot. (Middle click
+    // is a physical *click*, handled by the CGEventTap.) The copy waits
+    // `interTapGap` to be sure no second tap is coming.
     private let mouseDoubleTap: StaticTapRecognizer
+    // Magic Mouse 4 fingers: tap → paste, at once — nothing else uses 4 fingers.
+    private let mousePasteTap: StaticTapRecognizer
 
     // Trackpad: single tap → middle click, double tap → screenshot.
     private let trackpadTap: StaticTapRecognizer
@@ -28,11 +33,24 @@ final class GestureDetector {
         self.actionHandler = actionHandler
         self.mouseDoubleTap = StaticTapRecognizer(
             targetFingerCount: GestureDetector.mouseFingerCount,
-            onSingleTap: nil,
+            onSingleTap: { [weak actionHandler] in
+                guard Settings.mouseCopyPaste else { return }
+                os_log("Magic Mouse 3-finger tap → copy", log: log, type: .info)
+                actionHandler?.copy()
+            },
             onDoubleTap: { [weak actionHandler] in
                 os_log("Magic Mouse 3-finger double tap → screenshot", log: log, type: .info)
                 actionHandler?.triggerAreaScreenshot()
             }
+        )
+        self.mousePasteTap = StaticTapRecognizer(
+            targetFingerCount: GestureDetector.mousePasteFingerCount,
+            onSingleTap: { [weak actionHandler] in
+                guard Settings.mouseCopyPaste else { return }
+                os_log("Magic Mouse 4-finger tap → paste", log: log, type: .info)
+                actionHandler?.paste()
+            },
+            onDoubleTap: nil
         )
         self.trackpadTap = StaticTapRecognizer(
             targetFingerCount: GestureDetector.trackpadFingerCount,
@@ -47,11 +65,21 @@ final class GestureDetector {
         )
     }
 
+    /// A physical click was just turned into a middle click. The fingers that
+    /// made it also look like a tap to MT, so without this every 3-finger
+    /// middle click would copy as well, and two quick ones would take a
+    /// screenshot.
+    func clickConsumed() {
+        mouseDoubleTap.cancel()
+        mousePasteTap.cancel()
+    }
+
     /// Called on the main queue from MagicMouseListener.
     func ingest(frame: MagicMouseListener.Frame) {
         switch frame.device {
         case .magicMouse:
             mouseDoubleTap.ingest(frame: frame)
+            mousePasteTap.ingest(frame: frame)
         case .trackpad:
             trackpadTap.ingest(frame: frame)
         }
@@ -177,6 +205,12 @@ private final class StaticTapRecognizer {
 
     private func schedulePendingSingleTapIfNeeded() {
         guard let onSingleTap = onSingleTap else { return }
+        // Nothing to tell a single tap apart from: fire now, no waiting.
+        guard onDoubleTap != nil else {
+            reset()
+            onSingleTap()
+            return
+        }
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             // Only fire if we're still waiting for a second tap.
@@ -193,6 +227,12 @@ private final class StaticTapRecognizer {
     private func cancelPendingSingleTap() {
         pendingSingleTap?.cancel()
         pendingSingleTap = nil
+    }
+
+    /// Drops whatever sequence is in progress; the next arrival of the target
+    /// count starts fresh.
+    func cancel() {
+        reset()
     }
 
     private func reset() {

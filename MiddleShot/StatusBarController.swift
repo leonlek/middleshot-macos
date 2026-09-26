@@ -9,6 +9,10 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
     private let launchAtLoginItem: NSMenuItem
     private let thumbnailItem: NSMenuItem
     private let copyToClipboardItem: NSMenuItem
+    private let copyPasteItem = NSMenuItem(title: "Magic Mouse Copy & Paste",
+                                           action: #selector(toggleCopyPaste), keyEquivalent: "")
+    private let copyPasteHUDItem = NSMenuItem(title: "Show “Copied” / “Pasted”",
+                                              action: #selector(toggleCopyPasteHUD), keyEquivalent: "")
     private let saveLocationMenu = NSMenu()
     private let onReloadDevices: () -> Void
     /// Created on first use and kept for the life of the app, so closing the
@@ -84,6 +88,14 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         saveLocationMenu.delegate = self
         saveLocationItem.submenu = saveLocationMenu
         menu.addItem(saveLocationItem)
+        copyPasteItem.target = self
+        copyPasteItem.image = Self.symbol("doc.on.doc")
+        copyPasteItem.toolTip = "Magic Mouse: tap with 3 fingers to copy, tap with 4 fingers to paste."
+        menu.addItem(copyPasteItem)
+        copyPasteHUDItem.target = self
+        copyPasteHUDItem.image = Self.symbol("text.bubble")
+        copyPasteHUDItem.toolTip = "A small badge by the pointer confirms each copy and paste."
+        menu.addItem(copyPasteHUDItem)
         addItem(to: menu, title: "Reload Devices", symbol: "magicmouse",
                 action: #selector(reloadDevices))
         menu.addItem(.separator())
@@ -113,13 +125,17 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         thumbnailItem.state = Settings.showsScreenshotThumbnail ? .on : .off
         copyToClipboardItem.state = Settings.copiesScreenshotToClipboard ? .on : .off
+        copyPasteItem.state = Settings.mouseCopyPaste ? .on : .off
+        copyPasteHUDItem.state = Settings.showsCopyPasteHUD ? .on : .off
     }
 
     /// Only silent captures can reach the clipboard — thumbnail mode never
     /// learns where the file landed — so the copy item greys out rather than
     /// claiming something the app won't do.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        item == copyToClipboardItem ? !Settings.showsScreenshotThumbnail : true
+        if item == copyToClipboardItem { return !Settings.showsScreenshotThumbnail }
+        if item == copyPasteHUDItem { return Settings.mouseCopyPaste }
+        return true
     }
 
     private func addItem(to menu: NSMenu, title: String, symbol: String? = nil, action: Selector) {
@@ -312,6 +328,16 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         Settings.screenshotFolder = folder
         os_log("Screenshot folder set to %{public}@",
                log: log, type: .info, folder?.path ?? "system location")
+    }
+
+    @objc private func toggleCopyPaste() {
+        Settings.mouseCopyPaste.toggle()
+        os_log("Magic Mouse copy & paste %{public}@", log: log, type: .info,
+               Settings.mouseCopyPaste ? "enabled" : "disabled")
+    }
+
+    @objc private func toggleCopyPasteHUD() {
+        Settings.showsCopyPasteHUD.toggle()
     }
 
     @objc private func toggleLaunchAtLogin() {

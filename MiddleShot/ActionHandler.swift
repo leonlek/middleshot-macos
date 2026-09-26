@@ -33,6 +33,52 @@ final class ActionHandler {
         up?.post(tap: .cghidEventTap)
     }
 
+    private let hud = CursorHUD()
+
+    /// ⌘C as if typed. App key equivalents take synthesized keystrokes — it's
+    /// only WindowServer's symbolic hotkeys (⌘⇧⌃4) that ignore them. Key code 8
+    /// is the C key's position, which is what a real ⌘C sends under any layout
+    /// (Thai included: shortcuts go through the layout's Latin mapping).
+    ///
+    /// The badge reports what happened rather than what was attempted: if the
+    /// clipboard didn't change, there was nothing selected to copy.
+    func copy() {
+        let before = NSPasteboard.general.changeCount
+        postCommandKey(8)
+        os_log("⌘C posted", log: log, type: .info)
+        guard Settings.showsCopyPasteHUD else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            if NSPasteboard.general.changeCount != before {
+                self?.hud.show("Copied", symbol: "doc.on.doc")
+            } else {
+                self?.hud.show("Nothing to copy", symbol: "doc.on.doc.slash")
+            }
+        }
+    }
+
+    /// ⌘V as if typed (key code 9, the V key's position).
+    func paste() {
+        postCommandKey(9)
+        os_log("⌘V posted", log: log, type: .info)
+        if Settings.showsCopyPasteHUD {
+            hud.show("Pasted", symbol: "doc.on.clipboard")
+        }
+    }
+
+    private func postCommandKey(_ keyCode: CGKeyCode) {
+        // .privateState: modifiers the person happens to be holding (⇧ on the
+        // keyboard) mustn't leak in and turn ⌘V into ⌘⇧V.
+        let source = CGEventSource(stateID: .privateState)
+        for isDown in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: isDown) else {
+                os_log("Failed to create key event %d", log: log, type: .error, keyCode)
+                return
+            }
+            event.flags = .maskCommand
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
     func triggerAreaScreenshot() {
         // Saves the capture to the system screenshot location (Desktop by
         // default). The `Show Screenshot Thumbnail` setting picks between two

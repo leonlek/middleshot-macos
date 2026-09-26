@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         mouseTap.onIntercept = {
             actionHandler.postMiddleClickAtCursor()
+            detector.clickConsumed()
         }
         mouseTap.start()
 

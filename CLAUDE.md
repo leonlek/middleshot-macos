@@ -27,6 +27,10 @@ Personal-use project. **Not destined for the Mac App Store** — depends on the 
 | --------------- | ------------------------ | --------------------- |
 | Middle click    | 3-finger **click**       | 4-finger **tap**      |
 | Area screenshot | 3-finger **double tap**  | 4-finger **double tap** |
+| Copy (⌘C)       | 3-finger **tap**         | —                     |
+| Paste (⌘V)      | 4-finger **tap**         | —                     |
+
+**Copy & paste** (user decision 2026-09-26, after trying a 4-finger click/double-tap pair and a "guess copy or paste" single gesture — both judged too hard): a 3-finger tap copies, a 4-finger tap pastes; "Magic Mouse Copy & Paste" in the menu (`Settings.mouseCopyPaste`, on by default). The 3-finger copy waits `interTapGap` (0.22 s) to rule out the screenshot's second tap, so that second tap must now land within 0.22 s rather than 0.35 s. The 4-finger paste has no double tap to wait for and fires on release. A physical click resets both mouse tap recognizers (`GestureDetector.clickConsumed`), or every 3-finger middle click would also copy. ⌘C/⌘V are synthesized key events (key codes 8/9 + `.maskCommand`) — app key equivalents accept them, unlike WindowServer's symbolic hotkeys. `CursorHUD` shows "Copied" / "Nothing to copy" (judged by `NSPasteboard.changeCount`, not assumed) / "Pasted" beside the pointer; the user runs with the Mac muted, so the badge is the only confirmation.
 
 **Rationale (do not relitigate without strong reason):**
 
@@ -72,7 +76,8 @@ Remaining knobs (drift threshold, timing windows) are still compile-time constan
 MiddleShot/
 ├── AppDelegate.swift          # bootstrap, wire components, request permissions
 ├── StatusBarController.swift  # menu bar icon + Quit/About menu
-├── ActionHandler.swift        # CGEvent middle-click synthesis + screencapture shell-out
+├── ActionHandler.swift        # CGEvent middle-click synthesis, ⌘C/⌘V, screencapture shell-out
+├── CursorHUD.swift            # "Copied" / "Pasted" badge beside the pointer
 ├── MagicMouseListener.swift   # MultitouchSupport bridge — enumerates Magic Mouse + trackpad
 ├── GestureDetector.swift      # state machines: N-finger click / tap / double-tap
 ├── PermissionHelper.swift     # prompts + status checks for Accessibility / Input / Screen
