@@ -28,6 +28,8 @@
     <true/>
     <key>NSAccessibilityUsageDescription</key>
     <string>MiddleShot posts synthesized middle-click events and observes mouse clicks to translate multi-finger gestures into middle clicks.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>MiddleShot asks Finder to empty the Trash when you press Empty Trash in the Dashboard.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>MiddleShot launches the system screenshot tool when you perform the area-screenshot gesture.</string>
     <!-- Silent captures are named and read by MiddleShot itself (to copy them

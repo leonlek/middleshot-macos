@@ -45,6 +45,8 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
     private let placeholder = PlaceholderView()
     private let statusLine = StatusLine()
     private let toast = ToastView()
+    private let emptyTrashButton = NSButton(title: "Empty Trash…", target: nil, action: nil)
+    private var trashSize: Int64?
 
     private var items: [DiskItem] { results[scope]?.items ?? [] }
 
@@ -54,9 +56,16 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
         let root = NSView()
 
         volumeUsageLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        let volumeHeader = NSStackView(views: [volumeNameLabel, volumeUsageLabel])
+        emptyTrashButton.controlSize = .small
+        emptyTrashButton.bezelStyle = .rounded
+        emptyTrashButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
+        emptyTrashButton.imagePosition = .imageLeading
+        emptyTrashButton.target = self
+        emptyTrashButton.action = #selector(emptyTrashPressed)
+        emptyTrashButton.toolTip = "Moved items only free their space once the Trash is emptied."
+        let volumeHeader = NSStackView(views: [volumeNameLabel, volumeUsageLabel, NSView(), emptyTrashButton])
         volumeHeader.spacing = 8
-        volumeHeader.alignment = .firstBaseline
+        volumeHeader.alignment = .centerY
         let volumeStack = NSStackView(views: [volumeHeader, volumeBar])
         volumeStack.orientation = .vertical
         volumeStack.alignment = .leading
@@ -90,6 +99,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
 
         configureTable()
         cleanupList.onClean = { [weak self] items, group in self?.confirmClean(items, in: group) }
+        cleanupList.onManual = { [weak self] item in self?.explainRemoval(item) }
         cleanupList.onReveal = { [weak self] url in
             guard self?.isWorking == false else { return }
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -112,6 +122,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
             volumeStack.leadingAnchor.constraint(equalTo: volumeCard.leadingAnchor, constant: 14),
             volumeStack.trailingAnchor.constraint(equalTo: volumeCard.trailingAnchor, constant: -14),
             volumeBar.widthAnchor.constraint(equalTo: volumeStack.widthAnchor),
+            volumeHeader.widthAnchor.constraint(equalTo: volumeStack.widthAnchor),
 
             tools.topAnchor.constraint(equalTo: volumeCard.bottomAnchor, constant: 12),
             tools.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
@@ -142,6 +153,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
 
         view = root
         refreshVolume()
+        refreshTrashSize()
         render()
     }
 
@@ -234,7 +246,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
             cleanupList.scrollView.alphaValue = alpha
             if showsCleanup {
                 cleanupList.show(result.cleanup, pending: pendingIDs)
-                let total = result.cleanup.reduce(0) { $0 + $1.size }
+                let total = result.cleanup.reduce(0) { $0 + $1.removableSize }
                 let recommended = result.cleanup.flatMap(\.recommendedItems).reduce(0) { $0 + $1.size }
                 asideLabel.stringValue = recommended > 0
                     ? "\(DashboardStyle.bytes(total)) safe to clean · \(DashboardStyle.bytes(recommended)) recommended"
@@ -302,7 +314,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
     /// The latest finished scan's Safe to Clean total, for the menu bar dropdown.
     var cleanupSummary: (size: Int64, finishedAt: Date)? {
         guard let latest = results.values.max(by: { $0.finishedAt < $1.finishedAt }) else { return nil }
-        return (latest.cleanup.reduce(0) { $0 + $1.size }, latest.finishedAt)
+        return (latest.cleanup.reduce(0) { $0 + $1.removableSize }, latest.finishedAt)
     }
 
     func showSafeToClean() {
@@ -407,12 +419,17 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
         alert.alertStyle = .warning
         alert.icon = NSWorkspace.shared.icon(forFile: item.url.path)
         alert.messageText = "Move “\(item.displayName)” to the Trash?"
-        alert.informativeText = "\(DashboardStyle.bytes(item.size)) · \(item.displayPath)\n\n\(item.note) You can put it back from the Trash until you empty it."
-        addConfirmButtons(to: alert, title: "Move to Trash")
+        alert.informativeText = "\(DashboardStyle.bytes(item.size)) · \(item.displayPath)\n\n\(item.note) You can put it back from the Trash until you empty it.\n\n\(Self.deleteWarning)"
+        addConfirmButtons(to: alert, title: "Move to Trash", offersDelete: true)
         alert.beginSheetModal(for: window) { [weak self] response in
             // A scan may have started while the sheet was up (⌘R).
-            guard response == .alertSecondButtonReturn, let self, !self.isWorking else { return }
-            self.moveToTrash([(item.displayName, [item.url], item.size)])
+            guard let self, !self.isWorking else { return }
+            let entry: TrashEntry = (item.displayName, [item.url], item.size)
+            switch response {
+            case .alertSecondButtonReturn: self.moveToTrash([entry])
+            case .alertThirdButtonReturn: self.deleteImmediately([entry])
+            default: break
+            }
         }
     }
 
@@ -462,24 +479,35 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
             ? "This can't be undone."
             : "You can put \(items.count == 1 ? "it" : "them") back from the Trash until you empty it."
         alert.informativeText = lines.joined(separator: "\n") + "\n\n\(group.consequence) \(ending)"
-        addConfirmButtons(to: alert, title: permanent ? "Delete" : "Move to Trash")
+            + (permanent ? "" : "\n\n\(Self.deleteWarning)")
+        // Simulators and runtimes are already deleted outright: no second choice.
+        addConfirmButtons(to: alert, title: permanent ? "Delete" : "Move to Trash", offersDelete: !permanent)
         alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertSecondButtonReturn, let self, !self.isWorking else { return }
-            self.clean(items.filter { !self.pendingIDs.contains($0.id) })
+            guard let self, !self.isWorking else { return }
+            let remaining = items.filter { !self.pendingIDs.contains($0.id) }
+            switch response {
+            case .alertSecondButtonReturn: self.clean(remaining, immediately: false)
+            case .alertThirdButtonReturn: self.clean(remaining, immediately: true)
+            default: break
+            }
         }
     }
 
-    private func clean(_ items: [CleanupItem]) {
+    private static let deleteWarning = "Delete Immediately frees the space now, but can't be undone — it never goes to the Trash."
+
+    private func clean(_ items: [CleanupItem], immediately: Bool) {
         var toTrash: [TrashEntry] = []
         var toDelete: [CleanupItem] = []
         for item in items {
-            if case .trash(let urls) = item.action {
-                toTrash.append((item.title, urls, item.size))
-            } else {
-                toDelete.append(item)
+            switch item.action {
+            case .trash(let urls): toTrash.append((item.title, urls, item.size))
+            case .deleteSimulator, .deleteRuntime: toDelete.append(item)
+            case .manual: continue  // never offered a button; explained instead
             }
         }
-        if !toTrash.isEmpty { moveToTrash(toTrash) }
+        if !toTrash.isEmpty {
+            immediately ? deleteImmediately(toTrash) : moveToTrash(toTrash)
+        }
         if !toDelete.isEmpty { deleteWithSimctl(toDelete) }
     }
 
@@ -530,6 +558,159 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
             }
         }
         presentFailures(failures, verb: "move to the Trash")
+        refreshTrashSize()
+    }
+
+    /// Deletes for good, skipping the Trash. Every path is re-checked first,
+    /// exactly as for Move to Trash; the removal itself runs off the main
+    /// thread — a 10 GB node_modules is hundreds of thousands of files.
+    ///
+    /// Unlike the Trash this can't be all-or-nothing: if an entry fails part
+    /// way (a file in use, no permission), what was already removed stays
+    /// removed, and the failure is reported with the entry still listed.
+    private func deleteImmediately(_ entries: [TrashEntry]) {
+        var failures: [(name: String, error: Error)] = []
+        var ready: [TrashEntry] = []
+        for entry in entries {
+            if let reason = entry.urls.lazy.compactMap(DiskScanner.refusalReason(forTrashing:)).first {
+                os_log("Refused to delete %{public}@: %{public}@", log: log, type: .info, entry.name, reason)
+                failures.append((entry.name, CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: reason])))
+            } else {
+                ready.append(entry)
+            }
+        }
+        guard !ready.isEmpty else {
+            presentFailures(failures, verb: "delete")
+            return
+        }
+        let what = ready.count == 1 ? "“\(ready[0].name)”" : "\(ready.count) items"
+        toast.show("Deleting \(what)…")
+        DispatchQueue.global(qos: .userInitiated).async {
+            var deleted: [TrashEntry] = []
+            for entry in ready {
+                do {
+                    for url in entry.urls { try DiskScanner.deletePermanently(url) }
+                    deleted.append(entry)
+                } catch {
+                    os_log("Delete failed for %{public}@: %{public}@", log: log, type: .error, entry.name, "\(error)")
+                    failures.append((entry.name, error))
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                os_log("Deleted %d items permanently", log: log, type: .info, deleted.count)
+                self.removeFromResults(urls: deleted.flatMap(\.urls), ids: [])
+                self.resultsVersion += 1
+                self.refreshVolume()
+                self.render()
+                if !deleted.isEmpty {
+                    let done = deleted.count == 1 ? "“\(deleted[0].name)”" : "\(deleted.count) items"
+                    self.toast.show("Deleted \(done) · \(DashboardStyle.bytes(deleted.reduce(0) { $0 + $1.size })) freed")
+                }
+                self.presentFailures(failures, verb: "delete")
+            }
+        }
+    }
+
+    /// The steps for something MiddleShot can't remove itself, with the
+    /// command on the clipboard at a click when there is one.
+    private func explainRemoval(_ item: CleanupItem) {
+        guard let removal = item.manualRemoval, let window = view.window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.icon = NSImage(systemSymbolName: "lock.shield", accessibilityDescription: nil)
+        alert.messageText = "\(item.title) · \(DashboardStyle.bytes(item.size))"
+        alert.informativeText = removal.steps
+        alert.addButton(withTitle: "OK")
+        if removal.command != nil { alert.addButton(withTitle: "Copy Command") }
+        alert.addButton(withTitle: "Show in Finder")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            let showInFinder: NSApplication.ModalResponse = removal.command != nil ? .alertThirdButtonReturn : .alertSecondButtonReturn
+            if response == showInFinder {
+                NSWorkspace.shared.activateFileViewerSelecting([removal.location])
+            } else if response == .alertSecondButtonReturn, let command = removal.command {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(command, forType: .string)
+                self?.toast.show("Command copied — paste it into Terminal")
+            }
+        }
+    }
+
+    // MARK: - Trash
+
+    /// "Empty Trash (12.4 GB)…" — the size only when ~/.Trash is readable (Full
+    /// Disk Access); otherwise just "Empty Trash…".
+    private func refreshTrashSize() {
+        DispatchQueue.global(qos: .utility).async {
+            let size = DiskScanner.trashSize()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.trashSize = size
+                self.emptyTrashButton.title = size.map { "Empty Trash (\(DashboardStyle.bytes($0)))…" } ?? "Empty Trash…"
+                self.emptyTrashButton.isEnabled = size.map { $0 > 0 } ?? true
+            }
+        }
+    }
+
+    @objc private func emptyTrashPressed() {
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.icon = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
+        alert.messageText = "Empty the Trash?"
+        let size = trashSize.map { "\(DashboardStyle.bytes($0)) — " } ?? ""
+        alert.informativeText = "Everything in the Trash (\(size)including what other apps put there) is erased for good. This can't be undone.\n\nFinder does the emptying; the first time, macOS asks whether MiddleShot may control Finder."
+        addConfirmButtons(to: alert, title: "Empty Trash")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertSecondButtonReturn else { return }
+            self?.emptyTrash()
+        }
+    }
+
+    /// Finder empties every volume's Trash and copes with locked items; doing
+    /// it ourselves would need Full Disk Access just to see ~/.Trash. Run
+    /// through osascript so a big Trash never blocks the main thread. What was
+    /// freed is measured from the disk's free space, not assumed.
+    private func emptyTrash() {
+        let availableBefore = SystemStats.startupDisk()?.available
+        emptyTrashButton.isEnabled = false
+        toast.show("Emptying the Trash…")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", "tell application \"Finder\" to empty trash"]
+        let errors = Pipe()
+        task.standardError = errors
+        task.terminationHandler = { process in
+            let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.refreshVolume()
+                self.refreshTrashSize()
+                if process.terminationStatus == 0 {
+                    let freed = availableBefore.flatMap { before in
+                        SystemStats.startupDisk().map { max($0.available - before, 0) }
+                    }
+                    os_log("Trash emptied", log: log, type: .info)
+                    self.toast.show("Trash emptied" + (freed.map { " · \(DashboardStyle.bytes($0)) freed" } ?? ""))
+                } else {
+                    os_log("Empty Trash failed: %{public}@", log: log, type: .error, message)
+                    // -1743: the person said no to (or never answered) the
+                    // Automation prompt.
+                    let denied = message.contains("-1743")
+                    self.presentFailures([("the Trash", CocoaError(.featureUnsupported, userInfo: [
+                        NSLocalizedDescriptionKey: denied
+                            ? "MiddleShot isn't allowed to control Finder. Turn it on under System Settings › Privacy & Security › Automation › MiddleShot › Finder."
+                            : message.trimmingCharacters(in: .whitespacesAndNewlines),
+                    ]))], verb: "empty")
+                }
+            }
+        }
+        do {
+            try task.run()
+        } catch {
+            emptyTrashButton.isEnabled = true
+            presentFailures([("the Trash", error)], verb: "empty")
+        }
     }
 
     private func undoTrash(_ moved: [(original: URL, trashed: URL)], restoring before: [DiskScanScope: DiskScanResult],
@@ -554,6 +735,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
         if failed == nil, resultsVersion == version {
             results = before
         }
+        refreshTrashSize()
         render()
     }
 
@@ -569,7 +751,7 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
                 switch item.action {
                 case .deleteSimulator(let udid): arguments = ["delete", udid]
                 case .deleteRuntime(let identifier): arguments = ["runtime", "delete", identifier]
-                case .trash: continue
+                case .trash, .manual: continue
                 }
                 switch SimulatorInventory.runSimctl(arguments) {
                 case .success: deleted.append(item)
@@ -613,12 +795,18 @@ final class DiskUsageViewController: NSViewController, DashboardPanel, NSTableVi
         }
     }
 
-    private func addConfirmButtons(to alert: NSAlert, title: String) {
+    /// Cancel, then `title` (second button), then — when `offersDelete` —
+    /// "Delete Immediately" (third button): gone at once, no Trash, no Undo
+    /// (user request 2026-10-22, for space that's needed now).
+    private func addConfirmButtons(to alert: NSAlert, title: String, offersDelete: Bool = false) {
         // No key can confirm this: with a destructive button present macOS gives
         // the alert no default, so Return does nothing and Escape hits Cancel.
         // (Binding Return to Cancel by hand would take Escape away from it.)
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: title).hasDestructiveAction = true
+        if offersDelete {
+            alert.addButton(withTitle: "Delete Immediately").hasDestructiveAction = true
+        }
     }
 
     private func presentFailures(_ failures: [(name: String, error: Error)], verb: String) {

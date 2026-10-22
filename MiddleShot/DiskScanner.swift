@@ -643,6 +643,16 @@ final class DiskScanner {
         if case .protected(let reason) = classify(url).0 {
             return reason
         }
+        // An old extension version can still be loaded by an editor window
+        // opened before the update — never remove one while that editor runs.
+        let editorFolders = [".vscode": "com.microsoft.VSCode", ".vscode-insiders": "com.microsoft.VSCodeInsiders",
+                             ".cursor": "com.todesktop.230313mzl4w4u92", ".windsurf": "com.exafunction.windsurf"]
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for (folder, bundleID) in editorFolders where url.path.hasPrefix("\(home)/\(folder)/extensions/") {
+            if NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == bundleID }) {
+                return "The editor is open — quit it first."
+            }
+        }
         if url.pathExtension == "app",
            NSWorkspace.shared.runningApplications.contains(where: { $0.bundleURL?.standardizedFileURL == url.standardizedFileURL }) {
             return "It's running — quit it first."
@@ -661,6 +671,26 @@ final class DiskScanner {
             preconditionFailure("trashItem succeeded without reporting a location")
         }
         return location
+    }
+
+    /// Removes `url` for good — no Trash, no undo. Only ever called after a
+    /// confirmation that says so, and after `refusalReason` has passed.
+    static func deletePermanently(_ url: URL) throws {
+        try FileManager.default.removeItem(at: url)
+    }
+
+    /// The Trash's size, or nil when it can't be read — `~/.Trash` is closed to
+    /// apps without Full Disk Access ("Operation not permitted").
+    static func trashSize() -> Int64? {
+        let trash = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+        guard (try? FileManager.default.contentsOfDirectory(atPath: trash.path)) != nil,
+              let enumerator = FileManager.default.enumerator(at: trash, includingPropertiesForKeys: [.totalFileAllocatedSizeKey])
+        else { return nil }
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            total += Int64((try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
+        }
+        return total
     }
 
     static func restore(_ trashed: URL, to original: URL) throws {

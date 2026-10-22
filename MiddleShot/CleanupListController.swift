@@ -7,6 +7,8 @@ final class CleanupListController: NSObject, NSOutlineViewDataSource, NSOutlineV
     /// button and for a group's "Clean …" button alike.
     var onClean: (([CleanupItem], CleanupGroup) -> Void)?
     var onReveal: ((URL) -> Void)?
+    /// A row MiddleShot can't remove itself: show how to.
+    var onManual: ((CleanupItem) -> Void)?
 
     let scrollView = NSScrollView()
     private let outlineView = NSOutlineView()
@@ -221,7 +223,12 @@ final class CleanupListController: NSObject, NSOutlineViewDataSource, NSOutlineV
                 reveal.toolTip = "Show in Finder"
                 views.append(reveal)
             }
-            if pendingIDs.contains(item.id) {
+            if item.manualRemoval != nil {
+                let how = NSButton(title: "How to Remove…", target: self, action: #selector(manualPressed(_:)))
+                how.controlSize = .small
+                how.font = .systemFont(ofSize: 11)
+                views.append(how)
+            } else if pendingIDs.contains(item.id) {
                 let spinner = NSProgressIndicator()
                 spinner.style = .spinning
                 spinner.controlSize = .small
@@ -303,6 +310,11 @@ final class CleanupListController: NSObject, NSOutlineViewDataSource, NSOutlineV
         guard let node = outlineView.item(atRow: row) as? ItemNode,
               let group = outlineView.parent(forItem: node) as? GroupNode else { return }
         onClean?([node.item], group.group)
+    }
+
+    @objc private func manualPressed(_ sender: NSButton) {
+        guard let node = outlineView.item(atRow: outlineView.row(for: sender)) as? ItemNode else { return }
+        onManual?(node.item)
     }
 
     @objc private func revealPressed(_ sender: NSButton) {
