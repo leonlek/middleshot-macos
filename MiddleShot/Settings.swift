@@ -10,6 +10,8 @@ enum Settings {
     private static let copiesScreenshotToClipboardKey = "copiesScreenshotToClipboard"
     private static let screenshotFolderKey = "screenshotFolder"
     private static let mouseCopyPasteKey = "mouseCopyPaste"
+    private static let mouseTapToClickKey = "mouseTapToClick"
+    private static let mouseTapRightClickKey = "mouseTapRightClick"
     private static let showsCopyPasteHUDKey = "showsCopyPasteHUD"
     private static let dashboardTabKey = "dashboardTab"
     private static let diskScanScopeKey = "diskScanScope"
@@ -61,6 +63,21 @@ enum Settings {
     static var mouseCopyPaste: Bool {
         get { bool(mouseCopyPasteKey, default: true) }
         set { UserDefaults.standard.set(newValue, forKey: mouseCopyPasteKey) }
+    }
+
+    /// Magic Mouse one-finger tap → click (left half) / right click (right
+    /// half). Off by default: fingers rest on a Magic Mouse, so it's an
+    /// opt-in to try (2026-11-20).
+    static var mouseTapToClick: Bool {
+        get { UserDefaults.standard.bool(forKey: mouseTapToClickKey) }
+        set { UserDefaults.standard.set(newValue, forKey: mouseTapToClickKey) }
+    }
+
+    /// Whether a tap on the right side right-clicks. Off, every tap is a left
+    /// click (user request 2026-11-21). On by default.
+    static var mouseTapRightClick: Bool {
+        get { bool(mouseTapRightClickKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: mouseTapRightClickKey) }
     }
 
     /// The "Copied" / "Pasted" badge by the pointer.

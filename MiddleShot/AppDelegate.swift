@@ -46,6 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             actionHandler.postMiddleClickAtCursor()
             detector.clickConsumed()
         }
+        mouseTap.onPhysicalClick = {
+            detector.physicalClick()
+        }
+        mouseTap.isDragging = { actionHandler.isDragging }
+        actionHandler.fingersOnMouse = { [weak listener] in listener?.currentMouseFingerCount ?? 0 }
+        actionHandler.onDragReleased = { detector.dragReleased() }
         mouseTap.start()
 
         let reload: () -> Void = { [weak listener] in

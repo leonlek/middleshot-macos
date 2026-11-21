@@ -11,6 +11,12 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
     private let copyToClipboardItem: NSMenuItem
     private let copyPasteItem = NSMenuItem(title: "Magic Mouse Copy & Paste",
                                            action: #selector(toggleCopyPaste), keyEquivalent: "")
+    private let tapToClickItem = NSMenuItem(title: "Tap to Click (Magic Mouse)",
+                                            action: #selector(toggleTapToClick), keyEquivalent: "")
+    private let tapRightClickItem = NSMenuItem(title: "Left Click Only",
+                                               action: #selector(toggleTapRightClick), keyEquivalent: "")
+    private let smartZoomItem = NSMenuItem(title: "Turn Off Smart Zoom…",
+                                           action: #selector(openMouseSettings), keyEquivalent: "")
     private let copyPasteHUDItem = NSMenuItem(title: "Show “Copied” / “Pasted”",
                                               action: #selector(toggleCopyPasteHUD), keyEquivalent: "")
     private let saveLocationMenu = NSMenu()
@@ -96,6 +102,21 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         copyPasteHUDItem.image = Self.symbol("text.bubble")
         copyPasteHUDItem.toolTip = "A small badge by the pointer confirms each copy and paste."
         menu.addItem(copyPasteHUDItem)
+        tapToClickItem.target = self
+        tapToClickItem.image = Self.symbol("hand.tap")
+        tapToClickItem.toolTip = "Magic Mouse: tap with one finger to click — left half clicks, right half right-clicks, "
+            + "two taps double-click."
+        menu.addItem(tapToClickItem)
+        tapRightClickItem.target = self
+        tapRightClickItem.indentationLevel = 1
+        tapRightClickItem.toolTip = "Every tap is a left click, wherever it lands. "
+            + "Right-click with a physical press as usual."
+        menu.addItem(tapRightClickItem)
+        smartZoomItem.target = self
+        smartZoomItem.image = Self.symbol("plus.magnifyingglass")
+        smartZoomItem.toolTip = "Smart Zoom also answers a one-finger double tap — turn it off in Mouse settings "
+            + "so double-tapping only double-clicks."
+        menu.addItem(smartZoomItem)
         addItem(to: menu, title: "Reload Devices", symbol: "magicmouse",
                 action: #selector(reloadDevices))
         menu.addItem(.separator())
@@ -126,6 +147,10 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         thumbnailItem.state = Settings.showsScreenshotThumbnail ? .on : .off
         copyToClipboardItem.state = Settings.copiesScreenshotToClipboard ? .on : .off
         copyPasteItem.state = Settings.mouseCopyPaste ? .on : .off
+        tapToClickItem.state = Settings.mouseTapToClick ? .on : .off
+        tapRightClickItem.state = Settings.mouseTapRightClick ? .off : .on
+        tapRightClickItem.isHidden = !Settings.mouseTapToClick
+        smartZoomItem.isHidden = !(Settings.mouseTapToClick && Self.isSmartZoomOn)
         copyPasteHUDItem.state = Settings.showsCopyPasteHUD ? .on : .off
     }
 
@@ -334,6 +359,40 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         Settings.mouseCopyPaste.toggle()
         os_log("Magic Mouse copy & paste %{public}@", log: log, type: .info,
                Settings.mouseCopyPaste ? "enabled" : "disabled")
+    }
+
+    @objc private func toggleTapRightClick() {
+        Settings.mouseTapRightClick.toggle()
+        os_log("Tap left click only %{public}@", log: log, type: .info, Settings.mouseTapRightClick ? "off" : "on")
+    }
+
+    @objc private func toggleTapToClick() {
+        Settings.mouseTapToClick.toggle()
+        os_log("Tap to click %{public}@", log: log, type: .info, Settings.mouseTapToClick ? "enabled" : "disabled")
+        guard Settings.mouseTapToClick, Self.isSmartZoomOn else { return }
+        let alert = NSAlert()
+        alert.messageText = "Turn off Smart Zoom too?"
+        alert.informativeText = "A one-finger double tap is also Smart Zoom, so double-tapping to double-click would "
+            + "zoom the page as well.\n\nmacOS only applies this setting from System Settings › Mouse — "
+            + "switch Smart Zoom off there."
+        alert.addButton(withTitle: "Open Mouse Settings")
+        alert.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            openMouseSettings()
+        }
+    }
+
+    /// Smart Zoom is the Magic Mouse's one-finger double tap. Read, never
+    /// written: a `defaults write` to the driver's domain isn't picked up until
+    /// the next login, and the setting belongs to System Settings.
+    private static var isSmartZoomOn: Bool {
+        let domains = ["com.apple.driver.AppleBluetoothMultitouch.mouse", "com.apple.AppleMultitouchMouse"]
+        return domains.contains { UserDefaults(suiteName: $0)?.integer(forKey: "MouseOneFingerDoubleTapGesture") == 1 }
+    }
+
+    @objc private func openMouseSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Mouse-Settings.extension")!)
     }
 
     @objc private func toggleCopyPasteHUD() {

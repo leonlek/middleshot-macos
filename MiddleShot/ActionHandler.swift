@@ -35,6 +35,78 @@ final class ActionHandler {
 
     private let hud = CursorHUD()
 
+    /// Marks the clicks we post, so `MouseClickTap` can tell them from the
+    /// person's own presses.
+    static let syntheticMarker: Int64 = 0x4D53  // "MS"
+
+    /// True while tap-to-drag holds the (synthetic) left button down.
+    private(set) var isDragging = false
+    /// Fingers on the Magic Mouse — 0 once the reading goes stale. Read by
+    /// the drag watchdog.
+    var fingersOnMouse: () -> Int = { 0 }
+    /// Called when the watchdog lets go, so the recognizer forgets the drag.
+    var onDragReleased: () -> Void = {}
+    private var dragWatchdog: Timer?
+
+    /// Holds the left button down at the pointer. `MouseClickTap` turns
+    /// pointer movement into drags until `endDrag`.
+    func beginDrag() {
+        guard !isDragging else { return }
+        postButton(.leftMouseDown)
+        isDragging = true
+        // A drag must never outlive the finger: if the touch stream stops
+        // (sleep, the mouse disconnecting) the frame that would release it
+        // never comes. Let go once no finger has been seen for 0.6 s.
+        var noFingerSince: Date?
+        dragWatchdog = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.fingersOnMouse() > 0 {
+                noFingerSince = nil
+            } else if let since = noFingerSince, Date().timeIntervalSince(since) > 0.6 {
+                os_log("Drag watchdog released the button", log: log, type: .info)
+                self.endDrag()
+                self.onDragReleased()
+            } else if noFingerSince == nil {
+                noFingerSince = Date()
+            }
+        }
+    }
+
+    func endDrag() {
+        guard isDragging else { return }
+        dragWatchdog?.invalidate()
+        dragWatchdog = nil
+        isDragging = false
+        postButton(.leftMouseUp)
+    }
+
+    private func postButton(_ type: CGEventType) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+                                  mouseCursorPosition: cursorInCGCoords(), mouseButton: .left) else { return }
+        // Always a fresh single press: right after the tap that armed it, a
+        // click state of 2 would read as a double click.
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
+        event.post(tap: .cghidEventTap)
+    }
+
+    /// A left or right click at the pointer, as tap to click delivers it.
+    /// `clickCount` 2 makes the second click of a double click — apps read
+    /// the click state, not the timing.
+    func postClick(right: Bool, clickCount: Int) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        let location = cursorInCGCoords()
+        let types: (CGEventType, CGEventType) = right ? (.rightMouseDown, .rightMouseUp) : (.leftMouseDown, .leftMouseUp)
+        for type in [types.0, types.1] {
+            guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location,
+                                      mouseButton: right ? .right : .left) else { return }
+            event.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
+            event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
     /// ⌘C as if typed. App key equivalents take synthesized keystrokes — it's
     /// only WindowServer's symbolic hotkeys (⌘⇧⌃4) that ignore them. Key code 8
     /// is the C key's position, which is what a real ⌘C sends under any layout

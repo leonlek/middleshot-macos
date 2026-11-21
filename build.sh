@@ -40,6 +40,8 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 cp "$SRC_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
+# Rendered from Assets/AppIcon.svg by scripts/make-icon.sh.
+cp "$SRC_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 # Stamp the build identity into the *bundle's* Info.plist, never the source
 # one — deriving it from git keeps the repo clean (no version churn commit per

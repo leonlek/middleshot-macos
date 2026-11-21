@@ -13,6 +13,13 @@ private let log = OSLog(subsystem: "app.middleshot", category: "mouse")
 final class MouseClickTap {
     var shouldIntercept: () -> Bool = { false }
     var onIntercept: () -> Void = {}
+    /// Any real button press — left or right, intercepted or not — but never
+    /// a click MiddleShot itself posted.
+    var onPhysicalClick: () -> Void = {}
+    /// While true (tap-to-drag holds our synthetic button), pointer movement
+    /// is rewritten into drags: macOS doesn't know a button is down, so it
+    /// would otherwise send plain moves and nothing would drag.
+    var isDragging: () -> Bool = { false }
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -34,6 +41,8 @@ final class MouseClickTap {
         let mask: CGEventMask =
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.leftMouseUp.rawValue) |
+            (1 << CGEventType.rightMouseDown.rawValue) |
+            (1 << CGEventType.mouseMoved.rawValue) |
             (1 << CGEventType.leftMouseDragged.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -44,7 +53,18 @@ final class MouseClickTap {
                 guard let shared = MouseClickTap.shared else {
                     return Unmanaged.passUnretained(event)
                 }
+                let ours = event.getIntegerValueField(.eventSourceUserData) == ActionHandler.syntheticMarker
+                if !ours, type == .leftMouseDown || type == .rightMouseDown {
+                    shared.onPhysicalClick()
+                }
                 switch type {
+                case .mouseMoved:
+                    if shared.isDragging() {
+                        event.type = .leftMouseDragged
+                        event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
+                    }
+                case .leftMouseDown where ours:
+                    break
                 case .leftMouseDown:
                     if shared.shouldIntercept() {
                         shared.swallowingClick = true

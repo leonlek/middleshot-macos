@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- MiddleShot app icon, concept C "Middle Lane" (chosen 2026-11-20):
+       a silver Magic Mouse whose middle lane lights up — the middle button
+       the mouse doesn't have. Rendered to AppIcon.icns by scripts/make-icon.sh. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f8fa"/><stop offset="1" stop-color="#c9ced8"/>
+    </linearGradient>
+    <linearGradient id="mouse" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e7eaf0"/>
+    </linearGradient>
+    <linearGradient id="lane" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a5cff"/><stop offset="1" stop-color="#2f80ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="185" fill="none" stroke="#8e96a4" stroke-opacity=".35" stroke-width="2"/>
+  <ellipse cx="512" cy="800" rx="210" ry="30" fill="#1b1f27" opacity=".12"/>
+  <rect x="332" y="180" width="360" height="620" rx="180" fill="url(#mouse)"/>
+  <rect x="332" y="180" width="360" height="620" rx="180" fill="none" stroke="#9aa3b2" stroke-opacity=".55" stroke-width="5"/>
+  <rect x="474" y="230" width="76" height="300" rx="38" fill="url(#lane)"/>
+  <circle cx="512" cy="300" r="20" fill="#ffffff"/>
+  <path d="M402 560 Q512 600 622 560" fill="none" stroke="#9aa3b2" stroke-opacity=".5" stroke-width="5" stroke-linecap="round"/>
+</svg>

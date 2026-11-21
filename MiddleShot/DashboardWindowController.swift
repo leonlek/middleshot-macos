@@ -89,7 +89,6 @@ final class DashboardWindowController: NSWindowController, NSWindowDelegate, NST
     func show() {
         if NSApp.activationPolicy() != .regular {
             NSApp.setActivationPolicy(.regular)
-            NSApp.applicationIconImage = Self.dockIcon
             Self.installMainMenu(target: self)
         }
         showWindow(nil)
@@ -271,24 +270,4 @@ final class DashboardWindowController: NSWindowController, NSWindowDelegate, NST
         NSApp.mainMenu = main
         NSApp.windowsMenu = windowMenu
     }
-
-    /// The bundle ships no icon file (the app never had a Dock presence), so
-    /// the Dock tile is drawn from the same symbol as the menu bar item.
-    private static let dockIcon: NSImage = {
-        NSImage(size: NSSize(width: 512, height: 512), flipped: false) { rect in
-            let tile = NSBezierPath(roundedRect: rect.insetBy(dx: 50, dy: 50), xRadius: 92, yRadius: 92)
-            NSGradient(starting: NSColor(srgbRed: 0.27, green: 0.58, blue: 1.0, alpha: 1),
-                       ending: NSColor(srgbRed: 0.03, green: 0.35, blue: 0.9, alpha: 1))?
-                .draw(in: tile, angle: -90)
-            let configuration = NSImage.SymbolConfiguration(pointSize: 210, weight: .medium)
-                .applying(.init(paletteColors: [.white]))
-            if let symbol = NSImage(systemSymbolName: "cursorarrow.click.2", accessibilityDescription: nil)?
-                .withSymbolConfiguration(configuration) {
-                let size = symbol.size
-                symbol.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
-                                       width: size.width, height: size.height))
-            }
-            return true
-        }
-    }()
 }
