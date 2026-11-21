@@ -80,6 +80,10 @@ Also in the menu:
                           Reorder & Customize… to order, hide, or set the
                           busy-CPU warning
 
+Updates: once this build is installed, newer zips that land in Dropbox › Apps
+show up as "Update to …" at the top of the menu (and a dot on the icon) —
+click it, no reinstall or permission prompts. "Check for Updates…" checks now.
+
 Gestures:
    • Magic Mouse, 3-finger CLICK       → middle click
    • Magic Mouse, 3-finger double TAP  → area screenshot

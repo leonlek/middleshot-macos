@@ -20,6 +20,8 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
     private let copyPasteHUDItem = NSMenuItem(title: "Show “Copied” / “Pasted”",
                                               action: #selector(toggleCopyPasteHUD), keyEquivalent: "")
     private let saveLocationMenu = NSMenu()
+    private let updater = Updater()
+    private let updateItem = NSMenuItem(title: "Update", action: #selector(installUpdate), keyEquivalent: "")
     private let onReloadDevices: () -> Void
     /// Created on first use and kept for the life of the app, so closing the
     /// window keeps the last scan and snapshot around for next time.
@@ -64,6 +66,10 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         let header = NSMenuItem(title: Self.versionTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
+        updateItem.target = self
+        updateItem.image = Self.symbol("arrow.down.circle.fill")
+        updateItem.isHidden = true
+        menu.addItem(updateItem)
         menu.addItem(.separator())
 
         addItem(to: menu, title: "Open Dashboard…", symbol: "gauge.with.dots.needle.33percent",
@@ -129,6 +135,8 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
                 action: #selector(openScreenRecording))
 
         menu.addItem(.separator())
+        addItem(to: menu, title: "Check for Updates…", symbol: "arrow.triangle.2.circlepath",
+                action: #selector(checkForUpdates))
         addItem(to: menu, title: "Restart MiddleShot", symbol: "arrow.clockwise", action: #selector(restart))
         let quit = menu.addItem(withTitle: "Quit MiddleShot",
                                 action: #selector(NSApplication.terminate(_:)),
@@ -136,6 +144,86 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
         quit.image = Self.symbol("xmark.rectangle")
 
         statusItem.menu = menu
+
+        updater.onChange = { [weak self] in self?.updateAvailabilityChanged() }
+        updater.start()
+    }
+
+    // MARK: - Updates
+
+    private func updateAvailabilityChanged() {
+        if let release = updater.available {
+            updateItem.title = "Update to \(release.version) (build \(release.build))…"
+            updateItem.isHidden = false
+        } else {
+            updateItem.isHidden = true
+        }
+        statusItem.button?.image = Self.statusImage(badged: updater.available != nil)
+    }
+
+    /// The menu bar icon, with a dot while an update waits. Drawn at display
+    /// time so the glyph takes the menu bar's own ink (light or dark).
+    private static func statusImage(badged: Bool) -> NSImage? {
+        guard let symbol = NSImage(systemSymbolName: "cursorarrow.click.2", accessibilityDescription: "MiddleShot") else {
+            return nil
+        }
+        symbol.isTemplate = true
+        guard badged else { return symbol }
+        let size = symbol.size
+        let image = NSImage(size: size, flipped: false) { rect in
+            let glyph = NSImage(size: size, flipped: false) { inner in
+                symbol.draw(in: inner)
+                NSColor.labelColor.set()
+                inner.fill(using: .sourceAtop)
+                return true
+            }
+            glyph.draw(in: rect)
+            let dot = NSRect(x: rect.maxX - 6, y: rect.maxY - 6, width: 6, height: 6)
+            NSColor.systemBlue.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.accessibilityDescription = "MiddleShot — update available"
+        return image
+    }
+
+    @objc private func checkForUpdates() {
+        let alert = NSAlert()
+        if let release = updater.check() {
+            alert.messageText = "MiddleShot \(release.version) (build \(release.build)) is available"
+            alert.informativeText = "This Mac has build \(Updater.currentBuild). Installing quits MiddleShot for a moment "
+                + "and opens the new version; permissions carry over."
+            alert.addButton(withTitle: "Install")
+            alert.addButton(withTitle: "Later")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn { install(release) }
+        } else {
+            alert.messageText = "MiddleShot is up to date"
+            alert.informativeText = "Build \(Updater.currentBuild) is the newest in Dropbox › Apps."
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+    }
+
+    @objc private func installUpdate() {
+        guard let release = updater.check() ?? updater.available else { return }
+        install(release)
+    }
+
+    private func install(_ release: Updater.Release) {
+        updateItem.title = "Installing build \(release.build)…"
+        updateItem.isEnabled = false
+        updater.install(release) { [weak self] failure in
+            guard let self, let failure else { return }
+            self.updateItem.isEnabled = true
+            self.updateAvailabilityChanged()
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Couldn't update MiddleShot"
+            alert.informativeText = failure.localizedDescription
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -143,6 +231,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, NSMenuItemValidation 
             rebuildSaveLocationMenu()
             return
         }
+        updater.check()
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         thumbnailItem.state = Settings.showsScreenshotThumbnail ? .on : .off
         copyToClipboardItem.state = Settings.copiesScreenshotToClipboard ? .on : .off

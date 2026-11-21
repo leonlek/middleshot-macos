@@ -216,6 +216,10 @@ NSWorkspace.shared.open(URL(string:
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
 ```
 
+## Updates (other Macs)
+
+**Update from Dropbox** (user request 2026-11-21): `Updater.swift` lists `~/Dropbox/Apps` and `~/Library/CloudStorage/Dropbox*/Apps` (either may be the other Mac's Dropbox) for `MiddleShot-<ver>-b<build>.zip` newer than `CFBundleVersion`: at launch, hourly, on menu open, and on **Check for Updates…**. A newer build shows "Update to … (build N)…" under the menu header and a blue dot on the menu bar icon; nothing installs without a click. Install: `ditto -x -k` to a temp folder, strip quarantine, **refuse unless the new bundle satisfies our own designated requirement** (`SecStaticCodeCheckValidity` against `SecCodeCopyDesignatedRequirement` of self — same id, same "MiddleShot Dev" cert, which is also why every privacy grant carries over), then a shell that outlives us waits for the exit, `mv`s the old bundle aside, moves the new one in, and opens it (restoring the old one if a move fails). Only listing directory entries happens unasked, so a Dropbox placeholder is never downloaded just to be looked at. Tested 2026-11-21: build 38 → 39 from Dropbox, Accessibility still granted. A Mac on a build older than 40 needs one manual install to get the updater.
+
 ## Build & Run
 
 No Xcode project — `build.sh` drives `swiftc` directly. There are too few sources to justify a `.xcodeproj`, and a hand-written one is more fragile than a 30-line script.

@@ -89,6 +89,7 @@ build_slice() {
     -framework ApplicationServices \
     -framework ServiceManagement \
     -framework IOKit \
+    -framework Security \
     -framework SystemConfiguration \
     -o "$out" \
     "${SOURCES[@]}"
